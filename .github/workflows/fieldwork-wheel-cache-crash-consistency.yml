@@ -40,7 +40,8 @@ jobs:
           import json
           from pathlib import Path
 
-          rows = json.loads(Path('fieldwork-wheel-cache-crash-model.json').read_text())
+          receipt = json.loads(Path('fieldwork-wheel-cache-crash-model.json').read_text())
+          rows = receipt['cases']
           assert any(row['unsafe_trust'] for row in rows)
           assert any(
               row['protocol'] == 'verify-contents' and row['directory_visible']
