@@ -306,6 +306,7 @@ def main() -> int:
         "--keep", action="store_true", help="keep the temporary directory for inspection"
     )
     args = parser.parse_args()
+    uv = str(Path(args.uv).resolve()) if os.sep in args.uv else args.uv
 
     temp = Path(tempfile.mkdtemp(prefix="uv-cache-crash-probe-"))
     try:
@@ -313,9 +314,9 @@ def main() -> int:
         wheel_dir.mkdir()
         wheel = build_wheel(wheel_dir)
         scenarios = [
-            run_scenario(args.uv, temp, wheel, "clean-control"),
-            run_scenario(args.uv, temp, wheel, "metadata-zero"),
-            run_scenario(args.uv, temp, wheel, "module-corrupt"),
+            run_scenario(uv, temp, wheel, "clean-control"),
+            run_scenario(uv, temp, wheel, "metadata-zero"),
+            run_scenario(uv, temp, wheel, "module-corrupt"),
         ]
         output = {
             "evidence_class": "target-executed-process-corruption-model",
