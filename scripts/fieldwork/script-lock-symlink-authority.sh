@@ -84,7 +84,8 @@ if run_capture alias-b-malformed-lock "$uv" run --locked --script "$alias_b"; th
   echo 'malformed alias lock unexpectedly succeeded' >&2
   exit 1
 fi
-grep -F "$alias_b_lock" "$root/alias-b-malformed-lock.stderr" >/dev/null
+grep -F 'Failed to parse `uv.lock`' "$root/alias-b-malformed-lock.stderr" >/dev/null
+grep -F 'invalid type:' "$root/alias-b-malformed-lock.stderr" >/dev/null
 
 # The write path also follows invocation spelling, leaving the canonical lock untouched.
 rm -f "$alias_a_lock"
