@@ -1,0 +1,74 @@
+name: Fieldwork relocatable launcher portability
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fieldwork-307-relocatable-launcher-portability.yml
+      - scripts/fieldwork/relocatable-launcher-portability.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-307-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact pull-request head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Record exact identity and shell syntax
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          /bin/sh -n scripts/fieldwork/relocatable-launcher-portability.sh
+          printf 'tested_sha=%s\n' "$EXPECTED_SHA"
+          /bin/sh --version 2>&1 | head -n 1 || true
+          realpath --version | head -n 1
+
+      - name: Run GNU coreutils control
+        env:
+          RESULT: ${{ runner.temp }}/fieldwork-307-results.txt
+        run: |
+          set -euo pipefail
+          /bin/sh scripts/fieldwork/relocatable-launcher-portability.sh gnu | tee "$RESULT"
+
+      - name: Run Alpine BusyBox discriminator
+        env:
+          RESULT: ${{ runner.temp }}/fieldwork-307-results.txt
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "$PWD:/source:ro" \
+            alpine:3.22 \
+            /bin/sh /source/scripts/fieldwork/relocatable-launcher-portability.sh busybox \
+            | tee -a "$RESULT"
+
+      - name: Confirm clean tree and markers
+        env:
+          RESULT: ${{ runner.temp }}/fieldwork-307-results.txt
+        run: |
+          set -euo pipefail
+          grep -F 'FIELDWORK_307=gnu' "$RESULT"
+          grep -F 'FIELDWORK_307=busybox' "$RESULT"
+          test -z "$(git status --porcelain)"
+
+      - name: Retain exact matrix
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fieldwork-307-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fieldwork-307-results.txt
+          if-no-files-found: error
+          retention-days: 14
