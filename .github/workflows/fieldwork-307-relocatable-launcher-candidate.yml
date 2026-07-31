@@ -1,0 +1,107 @@
+name: Fieldwork relocatable launcher candidate
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fieldwork-307-relocatable-launcher-candidate.yml
+      - scripts/fieldwork/apply-relocatable-launcher-portability.py
+      - scripts/fieldwork/relocatable-launcher-portability.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-307-candidate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact pull-request head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify exact evidence carrier
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          python -m py_compile scripts/fieldwork/apply-relocatable-launcher-portability.py
+          /bin/sh -n scripts/fieldwork/relocatable-launcher-portability.sh
+          test -z "$(git status --porcelain)"
+          printf 'tested_sha=%s\n' "$EXPECTED_SHA"
+
+      - name: Generate three-owner source candidate
+        run: |
+          set -euo pipefail
+          python scripts/fieldwork/apply-relocatable-launcher-portability.py \
+            | tee "${{ runner.temp }}/candidate-counts.txt"
+          git diff --check
+          git diff -- \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-virtualenv/src/virtualenv.rs \
+            crates/uv/src/commands/project/run.rs \
+            > "${{ runner.temp }}/candidate.patch"
+          test -s "${{ runner.temp }}/candidate.patch"
+          git diff --name-only | sort > "${{ runner.temp }}/changed-files.txt"
+          cat > "${{ runner.temp }}/expected-files.txt" <<'EOF'
+          crates/uv-install-wheel/src/wheel.rs
+          crates/uv-virtualenv/src/virtualenv.rs
+          crates/uv/src/commands/project/run.rs
+          EOF
+          diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/changed-files.txt"
+          ! grep -F 'realpath --' crates/uv-install-wheel/src/wheel.rs
+          ! grep -F 'realpath --' crates/uv-virtualenv/src/virtualenv.rs
+          ! grep -F 'realpath --' crates/uv/src/commands/project/run.rs
+
+      - name: Compile affected crates
+        run: |
+          set -euo pipefail
+          cargo check -p uv-install-wheel -p uv-virtualenv -p uv
+
+      - name: Run GNU coreutils behavior matrix
+        env:
+          RESULT: ${{ runner.temp }}/fieldwork-307-results.txt
+        run: |
+          set -euo pipefail
+          /bin/sh scripts/fieldwork/relocatable-launcher-portability.sh gnu | tee "$RESULT"
+
+      - name: Run Alpine BusyBox behavior matrix
+        env:
+          RESULT: ${{ runner.temp }}/fieldwork-307-results.txt
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "$PWD:/source:ro" \
+            alpine:3.22 \
+            /bin/sh /source/scripts/fieldwork/relocatable-launcher-portability.sh busybox \
+            | tee -a "$RESULT"
+
+      - name: Verify result markers
+        env:
+          RESULT: ${{ runner.temp }}/fieldwork-307-results.txt
+        run: |
+          set -euo pipefail
+          grep -F 'FIELDWORK_307=gnu' "$RESULT"
+          grep -F 'FIELDWORK_307=busybox' "$RESULT"
+          grep -F 'FIELDWORK_307_PATCH=' "${{ runner.temp }}/candidate-counts.txt"
+
+      - name: Retain exact generated candidate and matrix
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fieldwork-307-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/candidate.patch
+            ${{ runner.temp }}/candidate-counts.txt
+            ${{ runner.temp }}/changed-files.txt
+            ${{ runner.temp }}/fieldwork-307-results.txt
+          if-no-files-found: warn
+          retention-days: 14
