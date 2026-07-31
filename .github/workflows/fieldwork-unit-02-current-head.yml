@@ -3,7 +3,7 @@ name: Fieldwork unit 02 current-head materialization
 on:
   pull_request:
     branches:
-      - main
+      - upstream/02-busybox-realpath
     paths:
       - .github/workflows/fieldwork-unit-02-current-head.yml
       - scripts/fieldwork/apply-unit-02-busybox-realpath.py
