@@ -2,9 +2,9 @@ name: Fieldwork unit 02 last-mile validation
 
 on:
   pull_request:
-    branches:
-      - fieldwork/02-runner-base
+    branches: [fieldwork/02-runner-base]
     paths:
+      - .github/workflows/fieldwork-unit-02-isolated.yml
       - .github/workflows/fieldwork-unit-02-last-mile.yml
       - scripts/fieldwork/apply-unit-02-last-mile.py
       - scripts/fieldwork/unit-02-platform-matrix.sh
@@ -22,8 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - name: Check out exact carrier head
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -40,6 +39,7 @@ jobs:
           test "$(git merge-base "$SOURCE_BASE" HEAD)" = "$SOURCE_BASE"
           git diff --name-only "$EXPECTED_BASE"...HEAD | sort > "${{ runner.temp }}/carrier-files.txt"
           cat > "${{ runner.temp }}/expected-carrier-files.txt" <<'EOF'
+          .github/workflows/fieldwork-unit-02-isolated.yml
           .github/workflows/fieldwork-unit-02-last-mile.yml
           scripts/fieldwork/apply-unit-02-last-mile.py
           scripts/fieldwork/unit-02-argv0-probe.py
@@ -50,7 +50,7 @@ jobs:
           /bin/sh -n scripts/fieldwork/unit-02-platform-matrix.sh
           test -z "$(git status --porcelain)"
 
-      - name: Generate and format exact source candidate
+      - name: Generate exact candidate
         run: |
           set -euo pipefail
           python scripts/fieldwork/apply-unit-02-last-mile.py | tee "${{ runner.temp }}/candidate-counts.txt"
@@ -71,38 +71,24 @@ jobs:
           assert 'LEGACY_RELOCATABLE_SHEBANG' in text
           assert 'copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs' in text
           PY
-          git diff -- \
-            crates/uv-install-wheel/src/wheel.rs \
-            crates/uv-virtualenv/src/virtualenv.rs \
-            crates/uv/src/commands/project/run.rs \
-            > "${{ runner.temp }}/candidate.patch"
+          git diff -- crates/uv-install-wheel/src/wheel.rs crates/uv-virtualenv/src/virtualenv.rs crates/uv/src/commands/project/run.rs > "${{ runner.temp }}/candidate.patch"
           test -s "${{ runner.temp }}/candidate.patch"
 
-      - name: Check formatting
-        run: cargo fmt --all --check
+      - name: Run source gates
+        run: |
+          set -euo pipefail
+          cargo fmt --all --check
+          cargo check -p uv-install-wheel -p uv-virtualenv -p uv
+          cargo test -p uv-install-wheel test_shebang
+          cargo test -p uv copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs
 
-      - name: Compile affected crates
-        run: cargo check -p uv-install-wheel -p uv-virtualenv -p uv
-
-      - name: Run wheel shebang test
-        run: cargo test -p uv-install-wheel test_shebang
-
-      - name: Run legacy and current recognizer test
-        run: cargo test -p uv copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs
-
-      - name: Run GNU launcher matrix
-        env:
-          RESULT: ${{ runner.temp }}/unit-02-results.txt
-        run: /bin/sh scripts/fieldwork/unit-02-platform-matrix.sh gnu | tee "$RESULT"
-
-      - name: Run Alpine BusyBox launcher matrix
+      - name: Run GNU and BusyBox matrices
         env:
           RESULT: ${{ runner.temp }}/unit-02-results.txt
         run: |
           set -euo pipefail
-          docker run --rm --volume "$PWD:/source:ro" alpine:3.22 \
-            /bin/sh /source/scripts/fieldwork/unit-02-platform-matrix.sh busybox \
-            | tee -a "$RESULT"
+          /bin/sh scripts/fieldwork/unit-02-platform-matrix.sh gnu | tee "$RESULT"
+          docker run --rm --volume "$PWD:/source:ro" alpine:3.22 /bin/sh /source/scripts/fieldwork/unit-02-platform-matrix.sh busybox | tee -a "$RESULT"
 
       - name: Probe direct shebang argv0 on Linux
         run: python scripts/fieldwork/unit-02-argv0-probe.py | tee "${{ runner.temp }}/argv0-linux.txt"
@@ -118,7 +104,7 @@ jobs:
           grep -F 'UNIT_02_LEGACY_RECOGNIZER=realpath:1,dirname:1' "${{ runner.temp }}/candidate-counts.txt"
           grep -F 'UNIT_02_DIRECT_SHEBANG_ARGV0=script-path' "${{ runner.temp }}/argv0-linux.txt"
 
-      - name: Retain Linux source and receipts
+      - name: Retain Linux receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -139,30 +125,19 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - name: Check out exact carrier head
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
-
-      - name: Validate harnesses
+      - name: Validate and run macOS probes
         run: |
           set -euo pipefail
           python -m py_compile scripts/fieldwork/unit-02-argv0-probe.py
           /bin/sh -n scripts/fieldwork/unit-02-platform-matrix.sh
-
-      - name: Run macOS launcher matrix
-        run: /bin/sh scripts/fieldwork/unit-02-platform-matrix.sh macos | tee "${{ runner.temp }}/unit-02-macos.txt"
-
-      - name: Probe direct shebang argv0 on macOS
-        run: python scripts/fieldwork/unit-02-argv0-probe.py | tee "${{ runner.temp }}/argv0-macos.txt"
-
-      - name: Verify macOS markers
-        run: |
-          set -euo pipefail
+          /bin/sh scripts/fieldwork/unit-02-platform-matrix.sh macos | tee "${{ runner.temp }}/unit-02-macos.txt"
+          python scripts/fieldwork/unit-02-argv0-probe.py | tee "${{ runner.temp }}/argv0-macos.txt"
           grep -F 'UNIT_02_MATRIX=macos' "${{ runner.temp }}/unit-02-macos.txt"
           grep -F 'UNIT_02_DIRECT_SHEBANG_ARGV0=script-path' "${{ runner.temp }}/argv0-macos.txt"
-
       - name: Retain macOS receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -175,20 +150,16 @@ jobs:
           retention-days: 14
 
   publish-source:
-    needs:
-      - source-linux
-      - platform-macos
+    needs: [source-linux, platform-macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Check out exact carrier head
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: true
-
-      - name: Recreate exact formatted candidate
+      - name: Recreate exact source
         run: |
           set -euo pipefail
           python scripts/fieldwork/apply-unit-02-last-mile.py
@@ -201,7 +172,6 @@ jobs:
           crates/uv/src/commands/project/run.rs
           EOF
           diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/published-files.txt"
-
       - name: Publish one source-only commit
         env:
           SOURCE_BASE: 79bbface771210df216b738e9bdc7df95e5a9e6b
@@ -213,22 +183,14 @@ jobs:
           export GIT_INDEX_FILE="${{ runner.temp }}/unit-02-source.index"
           rm -f "$GIT_INDEX_FILE"
           git read-tree "$SOURCE_BASE"
-          git add -- \
-            crates/uv-install-wheel/src/wheel.rs \
-            crates/uv-virtualenv/src/virtualenv.rs \
-            crates/uv/src/commands/project/run.rs
+          git add -- crates/uv-install-wheel/src/wheel.rs crates/uv-virtualenv/src/virtualenv.rs crates/uv/src/commands/project/run.rs
           tree=$(git write-tree)
-          commit=$(printf '%s\n\n%s\n' \
-            'fix: make relocatable launchers compatible with BusyBox realpath' \
-            'Remove unsupported delimiters and keep recognizing previously generated relocatable shebangs.' \
-            | git commit-tree "$tree" -p "$SOURCE_BASE")
+          commit=$(printf '%s\n\n%s\n' 'fix: make relocatable launchers compatible with BusyBox realpath' 'Remove unsupported delimiters and keep recognizing previously generated relocatable shebangs.' | git commit-tree "$tree" -p "$SOURCE_BASE")
           printf 'source_tree=%s\nsource_commit=%s\n' "$tree" "$commit" | tee "${{ runner.temp }}/source-receipt.txt"
           git diff-tree --no-commit-id --name-only -r "$commit" | sort > "${{ runner.temp }}/commit-files.txt"
           diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/commit-files.txt"
           git push --force origin "$commit:refs/heads/$TARGET_BRANCH"
-
-      - name: Retain publication receipt
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: unit-02-last-mile-publication-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
