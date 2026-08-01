@@ -29,7 +29,7 @@ if totals != {"realpath --": 5, "dirname --": 7}:
 
 run_text = RUN.read_text()
 function_marker = "#[cfg(unix)]\nfn copy_entrypoint(\n"
-constants = r'''#[cfg(unix)]
+constants = r"""#[cfg(unix)]
 const RELOCATABLE_SHEBANG: &str = r#"#!/bin/sh
 '''exec' "$(dirname "$(realpath "$0")")"/'python' "$0" "$@"
 ' '''
@@ -41,12 +41,12 @@ const LEGACY_RELOCATABLE_SHEBANG: &str = r#"#!/bin/sh
 ' '''
 "#;
 
-'''
+"""
 if run_text.count(function_marker) != 1:
     raise SystemExit("copy_entrypoint function marker changed")
 run_text = run_text.replace(function_marker, constants + function_marker, 1)
 
-old_recognizer = r'''    let Some(contents) = contents
+old_recognizer = r"""    let Some(contents) = contents
         // Check for a relative path or relocatable shebang
         .strip_prefix(
             r#"#!/bin/sh
@@ -55,14 +55,14 @@ old_recognizer = r'''    let Some(contents) = contents
 "#,
         )
         // Or, an absolute path shebang
-'''
-new_recognizer = r'''    let Some(contents) = contents
+"""
+new_recognizer = """    let Some(contents) = contents
         // Check for the current relocatable shebang.
         .strip_prefix(RELOCATABLE_SHEBANG)
         // Keep recognizing launchers generated before BusyBox compatibility was fixed.
         .or_else(|| contents.strip_prefix(LEGACY_RELOCATABLE_SHEBANG))
         // Or, an absolute path shebang
-'''
+"""
 if run_text.count(old_recognizer) != 1:
     raise SystemExit("relocatable shebang recognizer changed")
 run_text = run_text.replace(old_recognizer, new_recognizer, 1)
