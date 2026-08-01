@@ -53,6 +53,7 @@ jobs:
       - name: Generate exact candidate
         run: |
           set -euo pipefail
+          rustup component add rustfmt
           python scripts/fieldwork/apply-unit-02-last-mile.py | tee "${{ runner.temp }}/candidate-counts.txt"
           cargo fmt --all
           git diff --check
@@ -162,6 +163,7 @@ jobs:
       - name: Recreate exact source
         run: |
           set -euo pipefail
+          rustup component add rustfmt
           python scripts/fieldwork/apply-unit-02-last-mile.py
           cargo fmt --all
           git diff --check
