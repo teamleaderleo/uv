@@ -1,0 +1,142 @@
+name: Fieldwork unit 02 isolated materialization
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/02-runner-base
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-unit-02-isolated
+  cancel-in-progress: true
+
+jobs:
+  materialize-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact pull-request head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify isolated carrier fence
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          SOURCE_BASE: 79bbface771210df216b738e9bdc7df95e5a9e6b
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git merge-base "$EXPECTED_BASE" HEAD)" = "$EXPECTED_BASE"
+          git diff --name-only "$EXPECTED_BASE"...HEAD | sort > "${{ runner.temp }}/carrier-files.txt"
+          cat > "${{ runner.temp }}/expected-carrier-files.txt" <<'EOF'
+          scripts/fieldwork/apply-unit-02-busybox-realpath.py
+          scripts/fieldwork/unit-02-relocatable-launcher-matrix.sh
+          EOF
+          diff -u "${{ runner.temp }}/expected-carrier-files.txt" "${{ runner.temp }}/carrier-files.txt"
+          python -m py_compile scripts/fieldwork/apply-unit-02-busybox-realpath.py
+          /bin/sh -n scripts/fieldwork/unit-02-relocatable-launcher-matrix.sh
+          test -z "$(git status --porcelain)"
+          test "$(git merge-base "$SOURCE_BASE" HEAD)" = "$SOURCE_BASE"
+
+      - name: Generate exact source-only candidate
+        run: |
+          set -euo pipefail
+          python scripts/fieldwork/apply-unit-02-busybox-realpath.py | tee "${{ runner.temp }}/candidate-counts.txt"
+          git diff --check
+          git diff -- \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-virtualenv/src/virtualenv.rs \
+            crates/uv/src/commands/project/run.rs \
+            > "${{ runner.temp }}/candidate.patch"
+          test -s "${{ runner.temp }}/candidate.patch"
+          git diff --name-only | sort > "${{ runner.temp }}/changed-files.txt"
+          cat > "${{ runner.temp }}/expected-files.txt" <<'EOF'
+          crates/uv-install-wheel/src/wheel.rs
+          crates/uv-virtualenv/src/virtualenv.rs
+          crates/uv/src/commands/project/run.rs
+          EOF
+          diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/changed-files.txt"
+
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Compile affected crates
+        run: cargo check -p uv-install-wheel -p uv-virtualenv -p uv
+
+      - name: Run target-native shebang test
+        run: cargo test -p uv-install-wheel test_shebang
+
+      - name: Run GNU matrix
+        env:
+          RESULT: ${{ runner.temp }}/unit-02-results.txt
+        run: /bin/sh scripts/fieldwork/unit-02-relocatable-launcher-matrix.sh gnu | tee "$RESULT"
+
+      - name: Run Alpine BusyBox matrix
+        env:
+          RESULT: ${{ runner.temp }}/unit-02-results.txt
+        run: |
+          set -euo pipefail
+          docker run --rm --volume "$PWD:/source:ro" alpine:3.22 \
+            /bin/sh /source/scripts/fieldwork/unit-02-relocatable-launcher-matrix.sh busybox \
+            | tee -a "$RESULT"
+
+      - name: Verify result markers
+        env:
+          RESULT: ${{ runner.temp }}/unit-02-results.txt
+        run: |
+          set -euo pipefail
+          grep -F 'UNIT_02_MATRIX=gnu' "$RESULT"
+          grep -F 'UNIT_02_MATRIX=busybox' "$RESULT"
+          grep -F 'UNIT_02_PATCH=realpath:5,dirname:7' "${{ runner.temp }}/candidate-counts.txt"
+
+      - name: Publish one source-only commit
+        env:
+          SOURCE_BASE: 79bbface771210df216b738e9bdc7df95e5a9e6b
+          TARGET_BRANCH: upstream/02-busybox-realpath
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          export GIT_INDEX_FILE="${{ runner.temp }}/unit-02-source.index"
+          rm -f "$GIT_INDEX_FILE"
+          git read-tree "$SOURCE_BASE"
+          git add -- \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-virtualenv/src/virtualenv.rs \
+            crates/uv/src/commands/project/run.rs
+          tree=$(git write-tree)
+          commit=$(printf '%s\n\n%s\n' \
+            'fix: make relocatable launchers compatible with BusyBox realpath' \
+            'Remove unsupported option delimiters while preserving symlink-first launcher resolution.' \
+            | git commit-tree "$tree" -p "$SOURCE_BASE")
+          printf 'source_tree=%s\nsource_commit=%s\n' "$tree" "$commit" | tee "${{ runner.temp }}/source-receipt.txt"
+          git diff-tree --no-commit-id --name-only -r "$commit" | sort > "${{ runner.temp }}/published-files.txt"
+          diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/published-files.txt"
+          git push --force origin "$commit:refs/heads/$TARGET_BRANCH"
+
+      - name: Retain exact files and receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unit-02-isolated-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            crates/uv-install-wheel/src/wheel.rs
+            crates/uv-virtualenv/src/virtualenv.rs
+            crates/uv/src/commands/project/run.rs
+            ${{ runner.temp }}/candidate.patch
+            ${{ runner.temp }}/candidate-counts.txt
+            ${{ runner.temp }}/changed-files.txt
+            ${{ runner.temp }}/unit-02-results.txt
+            ${{ runner.temp }}/source-receipt.txt
+            ${{ runner.temp }}/published-files.txt
+          if-no-files-found: warn
+          retention-days: 14
