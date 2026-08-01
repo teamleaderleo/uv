@@ -99,7 +99,7 @@ jobs:
         run: |
           set -euo pipefail
           /bin/bash scripts/fieldwork/unit-02-activation-probe.sh gnu | tee "${{ runner.temp }}/activation-gnu.txt"
-          docker run --rm --volume "$PWD:/source:ro" bash:5.2-alpine bash /source/scripts/fieldwork/unit-02-activation-probe.sh busybox | tee "${{ runner.temp }}/activation-busybox.txt"
+          docker run --rm --volume "$PWD:/source:ro" alpine:3.22 /bin/sh -c 'apk add --no-cache bash >/dev/null && exec bash /source/scripts/fieldwork/unit-02-activation-probe.sh busybox' | tee "${{ runner.temp }}/activation-busybox.txt"
 
       - name: Probe direct shebang argv0 on Linux
         run: python scripts/fieldwork/unit-02-argv0-probe.py | tee "${{ runner.temp }}/argv0-linux.txt"
