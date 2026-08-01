@@ -9,6 +9,13 @@ EXPECTED = {
     Path("crates/uv/src/commands/project/run.rs"): {"realpath --": 1, "dirname --": 1},
 }
 
+VIRTUALENV_UNFORMATTED = '''            (true, "activate") => Cow::Borrowed(
+                r#"'"$(dirname "$(dirname "$(realpath "$SCRIPT_PATH")")")"'"#,
+            ),'''
+VIRTUALENV_FORMATTED = '''            (true, "activate") => {
+                Cow::Borrowed(r#"'"$(dirname "$(dirname "$(realpath "$SCRIPT_PATH")")")"'"#)
+            }'''
+
 totals = {"realpath --": 0, "dirname --": 0}
 
 for path, expected in EXPECTED.items():
@@ -18,6 +25,11 @@ for path, expected in EXPECTED.items():
         raise SystemExit(f"unexpected delimiter counts in {path}: {counts} != {expected}")
 
     updated = text.replace("realpath --", "realpath").replace("dirname --", "dirname")
+    if path.name == "virtualenv.rs":
+        if updated.count(VIRTUALENV_UNFORMATTED) != 1:
+            raise SystemExit("unexpected relocatable activate arm after delimiter replacement")
+        updated = updated.replace(VIRTUALENV_UNFORMATTED, VIRTUALENV_FORMATTED)
+
     if updated == text:
         raise SystemExit(f"candidate made no change in {path}")
     if "realpath --" in updated or "dirname --" in updated:
