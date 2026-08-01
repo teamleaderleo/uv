@@ -1,0 +1,116 @@
+name: Fieldwork 457 B2 self-replace failure
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/fieldwork-457-b2-self-replace-failure.yml
+      - crates/uv/src/bin/fieldwork_self_replace_failure.rs
+
+permissions:
+  contents: read
+
+jobs:
+  self-replace-failure:
+    name: Windows failed final replacement
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CANDIDATE_HEAD: 77e107dd2665f660c461998bc83174bf26ee7cf6
+      CI: 1
+    steps:
+      - name: Check out exact carrier head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source and execution-only fence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git merge-base HEAD $env:CANDIDATE_HEAD) -ne $env:CANDIDATE_HEAD) {
+            throw 'Carrier does not descend from exact candidate head'
+          }
+          $expected = @(
+            '.github/workflows/fieldwork-457-b2-self-replace-failure.yml'
+            'crates/uv/src/bin/fieldwork_self_replace_failure.rs'
+          ) | Sort-Object
+          $changed = @(git diff --name-only "$env:CANDIDATE_HEAD..HEAD") | Sort-Object
+          if (Compare-Object $expected $changed) {
+            throw "Unexpected carrier diff. Expected: $($expected -join ', '); actual: $($changed -join ', ')"
+          }
+          git diff --check "$env:CANDIDATE_HEAD..HEAD"
+          New-Item -ItemType Directory -Force -Path receipt | Out-Null
+          @(
+            "carrier_head=$(git rev-parse HEAD)"
+            "candidate_head=$env:CANDIDATE_HEAD"
+            "runner=$env:RUNNER_OS"
+          ) | Set-Content receipt/identity.txt
+          rustc --version | Tee-Object -FilePath receipt/rust-version.txt
+          cargo --version | Tee-Object -FilePath receipt/cargo-version.txt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          shared-key: fieldwork-457-b2-self-replace-failure
+          cache-on-failure: true
+
+      - name: Build isolated failure helper
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build -p uv --bin fieldwork_self_replace_failure --features self-update 2>&1 |
+            Tee-Object -FilePath receipt/build.log
+
+      - name: Run copied executable with missing replacement source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $controlDir = Join-Path $env:RUNNER_TEMP 'self-replace-failure-control'
+          New-Item -ItemType Directory -Force -Path $controlDir | Out-Null
+          $built = Join-Path $env:GITHUB_WORKSPACE 'target/debug/fieldwork_self_replace_failure.exe'
+          $victim = Join-Path $controlDir 'uv.exe'
+          $missing = Join-Path $controlDir 'missing-new-uv.exe'
+          Copy-Item -LiteralPath $built -Destination $victim
+          if (Test-Path -LiteralPath $missing) { Remove-Item -Force $missing }
+
+          $process = Start-Process -FilePath $victim -ArgumentList @($missing) -Wait -PassThru -NoNewWindow \
+            -RedirectStandardOutput (Join-Path $env:GITHUB_WORKSPACE 'receipt/helper-stdout.txt') \
+            -RedirectStandardError (Join-Path $env:GITHUB_WORKSPACE 'receipt/helper-stderr.txt')
+          "exit_code=$($process.ExitCode)" | Set-Content receipt/helper-exit.txt
+          if ($process.ExitCode -ne 42) {
+            throw "Expected helper to return the controlled self_replace error, got $($process.ExitCode)"
+          }
+
+          Start-Sleep -Milliseconds 500
+          $canonicalExists = Test-Path -LiteralPath $victim
+          $remaining = @(Get-ChildItem -LiteralPath $controlDir -Force | ForEach-Object { $_.Name })
+          @(
+            "canonical_exists=$canonicalExists"
+            "remaining_files=$($remaining -join ',')"
+          ) | Set-Content receipt/filesystem-result.txt
+          if ($canonicalExists) {
+            throw 'Expected current self-replace implementation to leave the canonical path absent after copy failure'
+          }
+
+      - name: Assemble exact receipt
+        if: always()
+        shell: pwsh
+        run: |
+          @{
+            carrierHead = (git rev-parse HEAD)
+            candidateHead = $env:CANDIDATE_HEAD
+            platform = 'windows-latest'
+            primitive = 'self-replace 1.5.0'
+            injectedFailure = 'replacement source does not exist after the running executable is renamed'
+            expectedObservation = 'helper returns an error and the canonical executable path is absent'
+          } | ConvertTo-Json | Set-Content receipt/receipt.json
+
+      - name: Upload exact receipt
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: fieldwork-457-b2-self-replace-failure
+          path: receipt/
+          if-no-files-found: error
+          retention-days: 30
