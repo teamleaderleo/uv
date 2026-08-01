@@ -116,6 +116,8 @@ jobs:
           TARGET_BRANCH: upstream/02-busybox-realpath
         run: |
           set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           export GIT_INDEX_FILE="${{ runner.temp }}/unit-02-source.index"
           rm -f "$GIT_INDEX_FILE"
           git read-tree "$SOURCE_BASE"
