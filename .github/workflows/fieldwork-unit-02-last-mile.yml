@@ -7,6 +7,7 @@ on:
       - .github/workflows/fieldwork-unit-02-isolated.yml
       - .github/workflows/fieldwork-unit-02-last-mile.yml
       - scripts/fieldwork/apply-unit-02-last-mile.py
+      - scripts/fieldwork/unit-02-activation-probe.sh
       - scripts/fieldwork/unit-02-platform-matrix.sh
       - scripts/fieldwork/unit-02-argv0-probe.py
 
@@ -42,12 +43,14 @@ jobs:
           .github/workflows/fieldwork-unit-02-isolated.yml
           .github/workflows/fieldwork-unit-02-last-mile.yml
           scripts/fieldwork/apply-unit-02-last-mile.py
+          scripts/fieldwork/unit-02-activation-probe.sh
           scripts/fieldwork/unit-02-argv0-probe.py
           scripts/fieldwork/unit-02-platform-matrix.sh
           EOF
           diff -u "${{ runner.temp }}/expected-carrier-files.txt" "${{ runner.temp }}/carrier-files.txt"
           python -m py_compile scripts/fieldwork/apply-unit-02-last-mile.py scripts/fieldwork/unit-02-argv0-probe.py
           /bin/sh -n scripts/fieldwork/unit-02-platform-matrix.sh
+          /bin/bash -n scripts/fieldwork/unit-02-activation-probe.sh
           test -z "$(git status --porcelain)"
 
       - name: Generate exact candidate
@@ -84,13 +87,19 @@ jobs:
           cargo test -p uv-install-wheel test_shebang
           cargo test -p uv copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs
 
-      - name: Run GNU and BusyBox matrices
+      - name: Run GNU and BusyBox launcher matrices
         env:
           RESULT: ${{ runner.temp }}/unit-02-results.txt
         run: |
           set -euo pipefail
           /bin/sh scripts/fieldwork/unit-02-platform-matrix.sh gnu | tee "$RESULT"
           docker run --rm --volume "$PWD:/source:ro" alpine:3.22 /bin/sh /source/scripts/fieldwork/unit-02-platform-matrix.sh busybox | tee -a "$RESULT"
+
+      - name: Run GNU and BusyBox activation matrices
+        run: |
+          set -euo pipefail
+          /bin/bash scripts/fieldwork/unit-02-activation-probe.sh gnu | tee "${{ runner.temp }}/activation-gnu.txt"
+          docker run --rm --volume "$PWD:/source:ro" bash:5.2-alpine bash /source/scripts/fieldwork/unit-02-activation-probe.sh busybox | tee "${{ runner.temp }}/activation-busybox.txt"
 
       - name: Probe direct shebang argv0 on Linux
         run: python scripts/fieldwork/unit-02-argv0-probe.py | tee "${{ runner.temp }}/argv0-linux.txt"
@@ -102,6 +111,8 @@ jobs:
           set -euo pipefail
           grep -F 'UNIT_02_MATRIX=gnu' "$RESULT"
           grep -F 'UNIT_02_MATRIX=busybox' "$RESULT"
+          grep -F 'UNIT_02_ACTIVATION=gnu' "${{ runner.temp }}/activation-gnu.txt"
+          grep -F 'UNIT_02_ACTIVATION=busybox' "${{ runner.temp }}/activation-busybox.txt"
           grep -F 'UNIT_02_REPLACED=realpath:5,dirname:7' "${{ runner.temp }}/candidate-counts.txt"
           grep -F 'UNIT_02_LEGACY_RECOGNIZER=realpath:2,dirname:2' "${{ runner.temp }}/candidate-counts.txt"
           grep -F 'UNIT_02_DIRECT_SHEBANG_ARGV0=script-path' "${{ runner.temp }}/argv0-linux.txt"
@@ -119,6 +130,8 @@ jobs:
             ${{ runner.temp }}/candidate-counts.txt
             ${{ runner.temp }}/changed-files.txt
             ${{ runner.temp }}/unit-02-results.txt
+            ${{ runner.temp }}/activation-gnu.txt
+            ${{ runner.temp }}/activation-busybox.txt
             ${{ runner.temp }}/argv0-linux.txt
           if-no-files-found: warn
           retention-days: 14
@@ -136,9 +149,12 @@ jobs:
           set -euo pipefail
           python -m py_compile scripts/fieldwork/unit-02-argv0-probe.py
           /bin/sh -n scripts/fieldwork/unit-02-platform-matrix.sh
+          /bin/bash -n scripts/fieldwork/unit-02-activation-probe.sh
           /bin/sh scripts/fieldwork/unit-02-platform-matrix.sh macos | tee "${{ runner.temp }}/unit-02-macos.txt"
+          /bin/bash scripts/fieldwork/unit-02-activation-probe.sh macos | tee "${{ runner.temp }}/activation-macos.txt"
           python scripts/fieldwork/unit-02-argv0-probe.py | tee "${{ runner.temp }}/argv0-macos.txt"
           grep -F 'UNIT_02_MATRIX=macos' "${{ runner.temp }}/unit-02-macos.txt"
+          grep -F 'UNIT_02_ACTIVATION=macos' "${{ runner.temp }}/activation-macos.txt"
           grep -F 'UNIT_02_DIRECT_SHEBANG_ARGV0=script-path' "${{ runner.temp }}/argv0-macos.txt"
       - name: Retain macOS receipts
         if: always()
@@ -147,6 +163,7 @@ jobs:
           name: unit-02-last-mile-macos-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/unit-02-macos.txt
+            ${{ runner.temp }}/activation-macos.txt
             ${{ runner.temp }}/argv0-macos.txt
           if-no-files-found: warn
           retention-days: 14
