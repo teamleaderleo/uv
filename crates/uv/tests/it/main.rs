@@ -14,6 +14,9 @@ mod branching_urls;
 ))]
 mod ecosystem;
 
+#[cfg(all(feature = "self-update", windows))]
+mod fieldwork_self_update_recovery;
+
 mod help;
 
 mod network;
