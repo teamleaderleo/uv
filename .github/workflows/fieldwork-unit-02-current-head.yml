@@ -10,7 +10,7 @@ on:
       - scripts/fieldwork/unit-02-relocatable-launcher-matrix.sh
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: fieldwork-unit-02-${{ github.event.pull_request.number }}
@@ -26,7 +26,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Verify exact carrier fence
         env:
@@ -71,6 +71,9 @@ jobs:
           ! grep -F 'realpath --' crates/uv-virtualenv/src/virtualenv.rs
           ! grep -F 'realpath --' crates/uv/src/commands/project/run.rs
 
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+
       - name: Check formatting
         run: cargo fmt --all --check
 
@@ -107,6 +110,29 @@ jobs:
           grep -F 'UNIT_02_MATRIX=busybox' "$RESULT"
           grep -F 'UNIT_02_PATCH=realpath:5,dirname:7' "${{ runner.temp }}/candidate-counts.txt"
 
+      - name: Publish one source-only commit to clean branch
+        env:
+          SOURCE_BASE: 79bbface771210df216b738e9bdc7df95e5a9e6b
+          TARGET_BRANCH: upstream/02-busybox-realpath
+        run: |
+          set -euo pipefail
+          export GIT_INDEX_FILE="${{ runner.temp }}/unit-02-source.index"
+          rm -f "$GIT_INDEX_FILE"
+          git read-tree "$SOURCE_BASE"
+          git add -- \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-virtualenv/src/virtualenv.rs \
+            crates/uv/src/commands/project/run.rs
+          tree=$(git write-tree)
+          commit=$(printf '%s\n\n%s\n' \
+            'fix: make relocatable launchers compatible with BusyBox realpath' \
+            'Remove unsupported option delimiters while preserving symlink-first launcher resolution.' \
+            | git commit-tree "$tree" -p "$SOURCE_BASE")
+          printf 'source_tree=%s\nsource_commit=%s\n' "$tree" "$commit" \
+            | tee "${{ runner.temp }}/source-receipt.txt"
+          test "$(git diff-tree --no-commit-id --name-only -r "$commit" | sort)" = "$(cat "${{ runner.temp }}/expected-files.txt")"
+          git push --force origin "$commit:refs/heads/$TARGET_BRANCH"
+
       - name: Retain exact source files, patch, and receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -120,5 +146,6 @@ jobs:
             ${{ runner.temp }}/candidate-counts.txt
             ${{ runner.temp }}/changed-files.txt
             ${{ runner.temp }}/unit-02-results.txt
+            ${{ runner.temp }}/source-receipt.txt
           if-no-files-found: warn
           retention-days: 14
