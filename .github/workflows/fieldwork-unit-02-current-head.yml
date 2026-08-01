@@ -1,19 +1,19 @@
 name: Fieldwork unit 02 current-head materialization
 
 on:
-  pull_request:
+  push:
     branches:
-      - upstream/02-busybox-realpath
+      - fieldwork/02-current-head-materialization
     paths:
       - .github/workflows/fieldwork-unit-02-current-head.yml
       - scripts/fieldwork/apply-unit-02-busybox-realpath.py
       - scripts/fieldwork/unit-02-relocatable-launcher-matrix.sh
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: fieldwork-unit-02-${{ github.event.pull_request.number }}
+  group: fieldwork-unit-02-materialization
   cancel-in-progress: true
 
 jobs:
@@ -21,21 +21,21 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - name: Check out exact pull-request head
+      - name: Check out exact carrier head
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Verify exact carrier fence
         env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
-          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_BASE: 79bbface771210df216b738e9bdc7df95e5a9e6b
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          test "$EXPECTED_BASE" = "79bbface771210df216b738e9bdc7df95e5a9e6b"
+          test "$(git merge-base "$EXPECTED_BASE" HEAD)" = "$EXPECTED_BASE"
           git diff --name-only "$EXPECTED_BASE"...HEAD | sort > "${{ runner.temp }}/carrier-files.txt"
           cat > "${{ runner.temp }}/expected-carrier-files.txt" <<'EOF'
           .github/workflows/fieldwork-unit-02-current-head.yml
@@ -107,6 +107,32 @@ jobs:
           grep -F 'UNIT_02_MATRIX=busybox' "$RESULT"
           grep -F 'UNIT_02_PATCH=realpath:5,dirname:7' "${{ runner.temp }}/candidate-counts.txt"
 
+      - name: Commit tested source blobs to carrier
+        env:
+          SOURCE_PARENT: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          mkdir -p scripts/fieldwork
+          cat > scripts/fieldwork/unit-02-materialization-receipt.txt <<EOF
+          source_parent=$SOURCE_PARENT
+          workflow_run=$RUN_ID
+          workflow_attempt=$RUN_ATTEMPT
+          public_base=79bbface771210df216b738e9bdc7df95e5a9e6b
+          candidate_counts=realpath:5,dirname:7
+          result=passed
+          EOF
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-virtualenv/src/virtualenv.rs \
+            crates/uv/src/commands/project/run.rs \
+            scripts/fieldwork/unit-02-materialization-receipt.txt
+          git commit -m "Materialize tested unit 02 source blobs [skip ci]"
+          git push origin HEAD:fieldwork/02-current-head-materialization
+
       - name: Retain exact source files, patch, and receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -116,6 +142,7 @@ jobs:
             crates/uv-install-wheel/src/wheel.rs
             crates/uv-virtualenv/src/virtualenv.rs
             crates/uv/src/commands/project/run.rs
+            scripts/fieldwork/unit-02-materialization-receipt.txt
             ${{ runner.temp }}/candidate.patch
             ${{ runner.temp }}/candidate-counts.txt
             ${{ runner.temp }}/changed-files.txt
