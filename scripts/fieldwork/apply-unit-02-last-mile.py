@@ -36,8 +36,20 @@ const RELOCATABLE_SHEBANG: &str = r#"#!/bin/sh
 "#;
 
 #[cfg(unix)]
+const RELOCATABLE_PYTHON3_SHEBANG: &str = r#"#!/bin/sh
+'''exec' "$(dirname "$(realpath "$0")")"/'python3' "$0" "$@"
+' '''
+"#;
+
+#[cfg(unix)]
 const LEGACY_RELOCATABLE_SHEBANG: &str = r#"#!/bin/sh
 '''exec' "$(dirname -- "$(realpath -- "$0")")"/'python' "$0" "$@"
+' '''
+"#;
+
+#[cfg(unix)]
+const LEGACY_RELOCATABLE_PYTHON3_SHEBANG: &str = r#"#!/bin/sh
+'''exec' "$(dirname -- "$(realpath -- "$0")")"/'python3' "$0" "$@"
 ' '''
 "#;
 
@@ -57,10 +69,12 @@ old_recognizer = r"""    let Some(contents) = contents
         // Or, an absolute path shebang
 """
 new_recognizer = """    let Some(contents) = contents
-        // Check for the current relocatable shebang.
+        // Check for corrected relocatable shebangs.
         .strip_prefix(RELOCATABLE_SHEBANG)
+        .or_else(|| contents.strip_prefix(RELOCATABLE_PYTHON3_SHEBANG))
         // Keep recognizing launchers generated before BusyBox compatibility was fixed.
         .or_else(|| contents.strip_prefix(LEGACY_RELOCATABLE_SHEBANG))
+        .or_else(|| contents.strip_prefix(LEGACY_RELOCATABLE_PYTHON3_SHEBANG))
         // Or, an absolute path shebang
 """
 if run_text.count(old_recognizer) != 1:
@@ -79,7 +93,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        LEGACY_RELOCATABLE_SHEBANG, RELOCATABLE_SHEBANG, copy_entrypoint,
+        LEGACY_RELOCATABLE_PYTHON3_SHEBANG, LEGACY_RELOCATABLE_SHEBANG,
+        RELOCATABLE_PYTHON3_SHEBANG, RELOCATABLE_SHEBANG, copy_entrypoint,
     };
 
     fn assert_relocatable_shebang_is_copied(shebang: &str) {
@@ -109,16 +124,22 @@ mod tests {
 
     #[test]
     fn copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs() {
-        assert_relocatable_shebang_is_copied(RELOCATABLE_SHEBANG);
-        assert_relocatable_shebang_is_copied(LEGACY_RELOCATABLE_SHEBANG);
+        for shebang in [
+            RELOCATABLE_SHEBANG,
+            RELOCATABLE_PYTHON3_SHEBANG,
+            LEGACY_RELOCATABLE_SHEBANG,
+            LEGACY_RELOCATABLE_PYTHON3_SHEBANG,
+        ] {
+            assert_relocatable_shebang_is_copied(shebang);
+        }
     }
 }
 '''
 run_text += tests
 RUN.write_text(run_text)
 
-if RUN.read_text().count("realpath --") != 1 or RUN.read_text().count("dirname --") != 1:
-    raise SystemExit("legacy delimiter form must remain exactly once in run.rs")
+if RUN.read_text().count("realpath --") != 2 or RUN.read_text().count("dirname --") != 2:
+    raise SystemExit("legacy delimiter forms must remain exactly twice in run.rs")
 
 print("UNIT_02_REPLACED=realpath:5,dirname:7")
-print("UNIT_02_LEGACY_RECOGNIZER=realpath:1,dirname:1")
+print("UNIT_02_LEGACY_RECOGNIZER=realpath:2,dirname:2")
