@@ -67,9 +67,10 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           text = Path('crates/uv/src/commands/project/run.rs').read_text()
-          assert text.count('realpath --') == 1
-          assert text.count('dirname --') == 1
-          assert 'LEGACY_RELOCATABLE_SHEBANG' in text
+          assert text.count('realpath --') == 2
+          assert text.count('dirname --') == 2
+          assert 'RELOCATABLE_PYTHON3_SHEBANG' in text
+          assert 'LEGACY_RELOCATABLE_PYTHON3_SHEBANG' in text
           assert 'copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs' in text
           PY
           git diff -- crates/uv-install-wheel/src/wheel.rs crates/uv-virtualenv/src/virtualenv.rs crates/uv/src/commands/project/run.rs > "${{ runner.temp }}/candidate.patch"
@@ -102,7 +103,7 @@ jobs:
           grep -F 'UNIT_02_MATRIX=gnu' "$RESULT"
           grep -F 'UNIT_02_MATRIX=busybox' "$RESULT"
           grep -F 'UNIT_02_REPLACED=realpath:5,dirname:7' "${{ runner.temp }}/candidate-counts.txt"
-          grep -F 'UNIT_02_LEGACY_RECOGNIZER=realpath:1,dirname:1' "${{ runner.temp }}/candidate-counts.txt"
+          grep -F 'UNIT_02_LEGACY_RECOGNIZER=realpath:2,dirname:2' "${{ runner.temp }}/candidate-counts.txt"
           grep -F 'UNIT_02_DIRECT_SHEBANG_ARGV0=script-path' "${{ runner.temp }}/argv0-linux.txt"
 
       - name: Retain Linux receipts
@@ -187,7 +188,7 @@ jobs:
           git read-tree "$SOURCE_BASE"
           git add -- crates/uv-install-wheel/src/wheel.rs crates/uv-virtualenv/src/virtualenv.rs crates/uv/src/commands/project/run.rs
           tree=$(git write-tree)
-          commit=$(printf '%s\n\n%s\n' 'fix: make relocatable launchers compatible with BusyBox realpath' 'Remove unsupported delimiters and keep recognizing previously generated relocatable shebangs.' | git commit-tree "$tree" -p "$SOURCE_BASE")
+          commit=$(printf '%s\n\n%s\n' 'fix: make relocatable launchers compatible with BusyBox realpath' 'Remove unsupported delimiters and keep recognizing historical python and python3 relocatable shebangs.' | git commit-tree "$tree" -p "$SOURCE_BASE")
           printf 'source_tree=%s\nsource_commit=%s\n' "$tree" "$commit" | tee "${{ runner.temp }}/source-receipt.txt"
           git diff-tree --no-commit-id --name-only -r "$commit" | sort > "${{ runner.temp }}/commit-files.txt"
           diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/commit-files.txt"
