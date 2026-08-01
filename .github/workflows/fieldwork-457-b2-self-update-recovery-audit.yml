@@ -1,21 +1,23 @@
-name: Fieldwork 457 B2 self-update recovery audit
+name: Fieldwork 457 B2 custom updater interruption
 
 on:
   pull_request:
     paths:
       - .github/workflows/fieldwork-457-b2-self-update-recovery-audit.yml
+      - crates/uv/tests/it/main.rs
+      - crates/uv/tests/it/fieldwork_self_update_recovery.rs
 
 permissions:
   contents: read
 
 jobs:
-  windows-negative-controls:
-    name: Windows real-executable negative controls
+  custom-ghe-interruption:
+    name: Windows custom-route canonical executable
     runs-on: windows-latest
     timeout-minutes: 90
     env:
       CANDIDATE_HEAD: 77e107dd2665f660c461998bc83174bf26ee7cf6
-      CANDIDATE_BASE: ec8ad5b7c697b9cbbb8a65c8de00fdb461f2010b
+      CI: 1
     steps:
       - name: Check out exact execution carrier
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -23,317 +25,63 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify carrier and source fence
+      - name: Verify source identity and execution-only fence
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $head = git rev-parse HEAD
           $mergeBase = git merge-base HEAD $env:CANDIDATE_HEAD
           if ($mergeBase -ne $env:CANDIDATE_HEAD) {
             throw "Carrier does not descend from candidate head: $mergeBase"
           }
-          $changed = @(git diff --name-only "$env:CANDIDATE_HEAD..HEAD")
-          if ($changed.Count -ne 1 -or $changed[0] -ne '.github/workflows/fieldwork-457-b2-self-update-recovery-audit.yml') {
-            throw "Unexpected carrier diff: $($changed -join ', ')"
+          $expected = @(
+            '.github/workflows/fieldwork-457-b2-self-update-recovery-audit.yml'
+            'crates/uv/tests/it/fieldwork_self_update_recovery.rs'
+            'crates/uv/tests/it/main.rs'
+          ) | Sort-Object
+          $changed = @(git diff --name-only "$env:CANDIDATE_HEAD..HEAD") | Sort-Object
+          if (Compare-Object $expected $changed) {
+            throw "Unexpected carrier diff. Expected: $($expected -join ', '); actual: $($changed -join ', ')"
           }
           git diff --check "$env:CANDIDATE_HEAD..HEAD"
           New-Item -ItemType Directory -Force -Path receipt | Out-Null
           @(
-            "carrier_head=$head"
+            "carrier_head=$(git rev-parse HEAD)"
             "candidate_head=$env:CANDIDATE_HEAD"
-            "candidate_base=$env:CANDIDATE_BASE"
             "runner=$env:RUNNER_OS"
           ) | Set-Content receipt/identity.txt
           rustc --version | Tee-Object -FilePath receipt/rust-version.txt
           cargo --version | Tee-Object -FilePath receipt/cargo-version.txt
 
-      - name: Record source-level commit windows
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          shared-key: fieldwork-457-b2-custom-updater
+          cache-on-failure: true
+
+      - name: Run exact custom-route interruption characterization
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $path = 'crates/uv/src/commands/self_update.rs'
-          $text = [IO.File]::ReadAllText($path)
-          $copyIndex = $text.IndexOf('for entry in fs_err::read_dir(temporary_install_dir)?')
-          $replaceIndex = $text.IndexOf('self_replace::self_replace(temporary_install_dir.join(current_file_name))')
-          if ($copyIndex -lt 0 -or $replaceIndex -lt 0 -or $copyIndex -ge $replaceIndex) {
-            throw 'Expected companion-copy-before-self-replace sequence not found'
-          }
-          if (-not $text.Contains('let original_path = temp_dir.path().join("uv.exe");')) {
-            throw 'Expected public regression fixture path not found'
-          }
-          if (-not $text.Contains('task.abort();') -or -not $text.Contains('drop(task);')) {
-            throw 'Expected non-awaited abort sequence not found'
-          }
-          if (-not $text.Contains('run_custom_updater(updater, printer, token.is_some()).await')) {
-            throw 'Expected axoupdater custom path not found'
-          }
-          @'
-          Source-read findings at candidate 77e107dd2665f660c461998bc83174bf26ee7cf6:
-          - the public regression asserts a temp_dir/uv.exe fixture, not std::env::current_exe();
-          - the public regression requests abort and drops the JoinHandle without awaiting cancellation;
-          - live companion binaries are copied one by one before the current executable is replaced;
-          - non-official/custom sources still delegate to axoupdater.
-          '@ | Set-Content receipt/source-findings.txt
-
-      - name: Run candidate's published interruption test
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'candidate-target'
-          cargo test -p uv --lib --features self-update test_interrupted_official_installer_preserves_original_executable -- --nocapture 2>&1 |
-            Tee-Object -FilePath receipt/candidate-published-test.log
-
-      - name: Inject and run candidate real-executable control
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $path = 'crates/uv/src/commands/self_update.rs'
-          $text = [IO.File]::ReadAllText($path)
-          $test = @'
-
-              #[cfg(windows)]
-              #[tokio::test]
-              async fn fieldwork_candidate_cancellation_preserves_actual_current_executable() {
-                  let temp_dir = TempDir::new().unwrap();
-                  let installer_path = temp_dir.path().join("installer.ps1");
-                  let install_prefix = temp_dir.path().join("install-prefix");
-                  let started_path = temp_dir.path().join("installer-started");
-                  let finish_path = temp_dir.path().join("finish-installer");
-                  let current_executable = std::env::current_exe().unwrap();
-                  let mut previous_name = current_executable.as_os_str().to_os_string();
-                  previous_name.push(".previous.exe");
-                  let previous_path = PathBuf::from(previous_name);
-                  let _ = fs_err::remove_file(&previous_path);
-
-                  fs_err::write(
-                      &installer_path,
-                      format!(
-                          "New-Item -ItemType File -Force -Path '{}' | Out-Null\nwhile (-not (Test-Path -LiteralPath '{}')) {{ Start-Sleep -Milliseconds 10 }}\n",
-                          started_path.display(),
-                          finish_path.display(),
-                      ),
-                  )
-                  .unwrap();
-
-                  let task_installer_path = installer_path.clone();
-                  let task_install_prefix = install_prefix.clone();
-                  let task = tokio::spawn(async move {
-                      execute_official_installer(
-                          &task_installer_path,
-                          &task_install_prefix,
-                          true,
-                          &Pep440Version::new([1, 2, 3]),
-                          None,
-                          None,
-                      )
-                      .await
-                  });
-
-                  for _ in 0..200 {
-                      if started_path.exists() {
-                          break;
-                      }
-                      tokio::time::sleep(Duration::from_millis(10)).await;
-                  }
-                  assert!(started_path.exists(), "installer should have started");
-
-                  task.abort();
-                  let join_error = task.await.expect_err("task should be cancelled");
-                  assert!(join_error.is_cancelled(), "task should report cancellation");
-                  assert!(
-                      current_executable.exists(),
-                      "candidate must keep the actual running executable at its canonical path"
-                  );
-                  assert!(
-                      !previous_path.exists(),
-                      "candidate must not pre-rename the actual running executable"
-                  );
-                  fs_err::write(&finish_path, "finish").unwrap();
-              }
-          '@
-          $index = $text.LastIndexOf("`n}")
-          if ($index -lt 0) { throw 'Could not find test module close' }
-          [IO.File]::WriteAllText($path, $text.Insert($index, $test))
-          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'candidate-target'
-          cargo test -p uv --lib --features self-update fieldwork_candidate_cancellation_preserves_actual_current_executable -- --nocapture 2>&1 |
-            Tee-Object -FilePath receipt/candidate-real-executable-test.log
-          git checkout -- $path
-
-      - name: Prepare exact old-base negative controls
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          git fetch https://github.com/astral-sh/uv.git $env:CANDIDATE_BASE
-          $baseDir = Join-Path $env:RUNNER_TEMP 'uv-base'
-          git worktree add --detach $baseDir $env:CANDIDATE_BASE
-          $path = Join-Path $baseDir 'crates/uv/src/commands/self_update.rs'
-          $text = [IO.File]::ReadAllText($path)
-          $tests = @'
-
-              #[cfg(windows)]
-              #[tokio::test]
-              async fn fieldwork_old_head_weak_fixture_control() {
-                  let temp_dir = TempDir::new().unwrap();
-                  let installer_path = temp_dir.path().join("installer.ps1");
-                  let install_prefix = temp_dir.path().join("install-prefix");
-                  let original_path = temp_dir.path().join("uv.exe");
-                  let started_path = temp_dir.path().join("installer-started");
-                  let finish_path = temp_dir.path().join("finish-installer");
-
-                  fs_err::write(&original_path, "old uv").unwrap();
-                  fs_err::write(
-                      &installer_path,
-                      format!(
-                          "New-Item -ItemType File -Force -Path '{}' | Out-Null\nwhile (-not (Test-Path -LiteralPath '{}')) {{ Start-Sleep -Milliseconds 10 }}\n",
-                          started_path.display(),
-                          finish_path.display(),
-                      ),
-                  )
-                  .unwrap();
-
-                  let task_installer_path = installer_path.clone();
-                  let task_install_prefix = install_prefix.clone();
-                  let task = tokio::spawn(async move {
-                      execute_official_installer(
-                          &task_installer_path,
-                          &task_install_prefix,
-                          true,
-                          &Pep440Version::new([1, 2, 3]),
-                          None,
-                      )
-                      .await
-                  });
-
-                  for _ in 0..200 {
-                      if started_path.exists() {
-                          break;
-                      }
-                      tokio::time::sleep(Duration::from_millis(10)).await;
-                  }
-                  assert!(started_path.exists(), "installer should have started");
-
-                  task.abort();
-                  drop(task);
-                  fs_err::write(&finish_path, "finish").unwrap();
-                  assert!(
-                      original_path.exists(),
-                      "the unrelated fixture still exists even when the real test executable was displaced"
-                  );
-              }
-
-              #[cfg(windows)]
-              #[tokio::test]
-              async fn fieldwork_old_head_cancellation_displaces_actual_current_executable() {
-                  let temp_dir = TempDir::new().unwrap();
-                  let installer_path = temp_dir.path().join("installer.ps1");
-                  let install_prefix = temp_dir.path().join("install-prefix");
-                  let started_path = temp_dir.path().join("installer-started");
-                  let finish_path = temp_dir.path().join("finish-installer");
-                  let current_executable = std::env::current_exe().unwrap();
-                  let mut previous_name = current_executable.as_os_str().to_os_string();
-                  previous_name.push(".previous.exe");
-                  let previous_path = PathBuf::from(previous_name);
-                  let _ = fs_err::remove_file(&previous_path);
-
-                  fs_err::write(
-                      &installer_path,
-                      format!(
-                          "New-Item -ItemType File -Force -Path '{}' | Out-Null\nwhile (-not (Test-Path -LiteralPath '{}')) {{ Start-Sleep -Milliseconds 10 }}\n",
-                          started_path.display(),
-                          finish_path.display(),
-                      ),
-                  )
-                  .unwrap();
-
-                  let task_installer_path = installer_path.clone();
-                  let task_install_prefix = install_prefix.clone();
-                  let task = tokio::spawn(async move {
-                      execute_official_installer(
-                          &task_installer_path,
-                          &task_install_prefix,
-                          true,
-                          &Pep440Version::new([1, 2, 3]),
-                          None,
-                      )
-                      .await
-                  });
-
-                  for _ in 0..200 {
-                      if started_path.exists() {
-                          break;
-                      }
-                      tokio::time::sleep(Duration::from_millis(10)).await;
-                  }
-                  assert!(started_path.exists(), "installer should have started");
-
-                  task.abort();
-                  let join_error = task.await.expect_err("task should be cancelled");
-                  assert!(join_error.is_cancelled(), "task should report cancellation");
-                  assert!(
-                      !current_executable.exists(),
-                      "old head should expose the canonical-path loss under cancellation"
-                  );
-                  assert!(
-                      previous_path.exists(),
-                      "old head should leave the running executable under .previous.exe"
-                  );
-
-                  fs_err::rename(&previous_path, &current_executable).unwrap();
-                  fs_err::write(&finish_path, "finish").unwrap();
-              }
-          '@
-          $index = $text.LastIndexOf("`n}")
-          if ($index -lt 0) { throw 'Could not find old-base test module close' }
-          [IO.File]::WriteAllText($path, $text.Insert($index, $tests))
-          "base_worktree=$baseDir" | Set-Content receipt/base-worktree.txt
-
-      - name: Prove published fixture is non-discriminating on old head
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $baseDir = Join-Path $env:RUNNER_TEMP 'uv-base'
-          Push-Location $baseDir
-          try {
-            $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'base-weak-target'
-            cargo test -p uv --lib --features self-update fieldwork_old_head_weak_fixture_control -- --nocapture 2>&1 |
-              Tee-Object -FilePath "$env:GITHUB_WORKSPACE/receipt/base-weak-fixture-test.log"
-          } finally {
-            Pop-Location
-          }
-
-      - name: Prove old head loses the actual canonical executable
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $baseDir = Join-Path $env:RUNNER_TEMP 'uv-base'
-          Push-Location $baseDir
-          try {
-            $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'base-real-target'
-            cargo test -p uv --lib --features self-update fieldwork_old_head_cancellation_displaces_actual_current_executable -- --nocapture 2>&1 |
-              Tee-Object -FilePath "$env:GITHUB_WORKSPACE/receipt/base-real-executable-test.log"
-          } finally {
-            Pop-Location
-          }
+          cargo test -p uv --test it --features self-update fieldwork_custom_ghe_interruption_displaces_canonical_executable -- --nocapture 2>&1 |
+            Tee-Object -FilePath receipt/custom-ghe-interruption.log
 
       - name: Assemble receipt
         if: always()
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
           @{
-            candidateHead = $env:CANDIDATE_HEAD
-            candidateBase = $env:CANDIDATE_BASE
             carrierHead = (git rev-parse HEAD)
+            candidateHead = $env:CANDIDATE_HEAD
             platform = 'windows-latest'
-            publishedFixtureQuestion = 'Does the public test fail on the old implementation?'
-            actualBoundaryQuestion = 'Does cancellation preserve std::env::current_exe() at its canonical path?'
+            route = 'UV_INSTALLER_GHE_BASE_URL override -> run_custom_updater -> axoupdater 0.10.0'
+            invariant = 'canonical uv.exe is absent and .previous.exe remains after process interruption'
           } | ConvertTo-Json | Set-Content receipt/receipt.json
 
-      - name: Upload audit receipt
+      - name: Upload exact receipt
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
-          name: fieldwork-457-b2-uv-self-update-recovery-audit
+          name: fieldwork-457-b2-custom-updater-interruption
           path: receipt/
           if-no-files-found: error
           retention-days: 30
