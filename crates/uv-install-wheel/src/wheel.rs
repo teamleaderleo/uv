@@ -125,7 +125,7 @@ fn format_shebang(executable: impl AsRef<Path>, os_name: &str, relocatable: bool
         // (note: the Windows trampoline binaries natively support relative paths to executable)
         if shebang_length > 127 || executable.contains(' ') || relocatable {
             let prefix = if relocatable {
-                r#""$(dirname -- "$(realpath -- "$0")")"/"#
+                r#""$(dirname "$(realpath "$0")")"/"#
             } else {
                 ""
             };
@@ -432,11 +432,11 @@ impl WheelFile {
     /// Whether the wheel should be installed into the `purelib` or `platlib` directory.
     pub(crate) fn lib_kind(&self) -> LibKind {
         // Determine whether Root-Is-Purelib == ‘true’.
-        // If it is, the wheel is pure, and should be installed into purelib.
         let root_is_purelib = self
             .0
             .get("Root-Is-Purelib")
-            .and_then(|root_is_purelib| root_is_purelib.first())
+            .and_then(|root_is_purelib| root_is_purelib.first());
+        let root_is_purelib = root_is_purelib
             .is_some_and(|root_is_purelib| root_is_purelib == "true");
         if root_is_purelib {
             LibKind::Pure
@@ -1415,7 +1415,7 @@ mod test {
         let os_name = "posix";
         assert_eq!(
             format_shebang(executable, os_name, true),
-            "#!/bin/sh\n'''exec' \"$(dirname -- \"$(realpath -- \"$0\")\")\"/'python3' \"$0\" \"$@\"\n' '''"
+            "#!/bin/sh\n'''exec' \"$(dirname \"$(realpath \"$0\")\")\"/'python3' \"$0\" \"$@\"\n' '''"
         );
 
         // Except on Windows...
