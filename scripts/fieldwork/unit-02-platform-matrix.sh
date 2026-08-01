@@ -22,6 +22,7 @@ cat >"$root/bin/python" <<'EOF'
 printf 'python=%s\nscript=%s\narg=%s\n' "$0" "$1" "${2-}"
 EOF
 chmod +x "$root/bin/python"
+expected_python=$(realpath "$root/bin/python")
 
 write_launcher() {
   variant=$1
@@ -64,7 +65,7 @@ run_case() {
 
   if [ "$variant" = candidate ]; then
     test "$status" -eq 0
-    grep -F "python=$root/bin/python" "$stdout" >/dev/null
+    grep -F "python=$expected_python" "$stdout" >/dev/null
     grep -F 'arg=probe' "$stdout" >/dev/null
     test ! -s "$stderr"
     return
@@ -73,13 +74,13 @@ run_case() {
   case "$mode" in
     gnu)
       test "$status" -eq 0
-      grep -F "python=$root/bin/python" "$stdout" >/dev/null
+      grep -F "python=$expected_python" "$stdout" >/dev/null
       grep -F 'arg=probe' "$stdout" >/dev/null
       test ! -s "$stderr"
       ;;
     busybox)
       test "$status" -eq 0
-      grep -F "python=$root/bin/python" "$stdout" >/dev/null
+      grep -F "python=$expected_python" "$stdout" >/dev/null
       grep -F 'arg=probe' "$stdout" >/dev/null
       grep -F 'realpath: --' "$stderr" >/dev/null
       ;;
