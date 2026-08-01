@@ -92,6 +92,12 @@ jobs:
           cargo test -p uv copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs
           cargo test -p uv --test python --features test-python venv::verify_pyvenv_cfg_relocatable -- --exact
 
+      - name: Run declared Rust lint
+        run: |
+          set -euo pipefail
+          rustup component add clippy
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
       - name: Run GNU and BusyBox launcher matrices
         env:
           RESULT: ${{ runner.temp }}/unit-02-results.txt
