@@ -1,0 +1,238 @@
+name: Fieldwork unit 02 last-mile validation
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/02-runner-base
+    paths:
+      - .github/workflows/fieldwork-unit-02-last-mile.yml
+      - scripts/fieldwork/apply-unit-02-last-mile.py
+      - scripts/fieldwork/unit-02-platform-matrix.sh
+      - scripts/fieldwork/unit-02-argv0-probe.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-unit-02-last-mile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  source-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact carrier head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Verify carrier fence
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE: d2ebfd92457b0047a4b02e3ccb8431769e12b145
+          SOURCE_BASE: 79bbface771210df216b738e9bdc7df95e5a9e6b
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git merge-base "$EXPECTED_BASE" HEAD)" = "$EXPECTED_BASE"
+          test "$(git merge-base "$SOURCE_BASE" HEAD)" = "$SOURCE_BASE"
+          git diff --name-only "$EXPECTED_BASE"...HEAD | sort > "${{ runner.temp }}/carrier-files.txt"
+          cat > "${{ runner.temp }}/expected-carrier-files.txt" <<'EOF'
+          .github/workflows/fieldwork-unit-02-last-mile.yml
+          scripts/fieldwork/apply-unit-02-last-mile.py
+          scripts/fieldwork/unit-02-argv0-probe.py
+          scripts/fieldwork/unit-02-platform-matrix.sh
+          EOF
+          diff -u "${{ runner.temp }}/expected-carrier-files.txt" "${{ runner.temp }}/carrier-files.txt"
+          python -m py_compile scripts/fieldwork/apply-unit-02-last-mile.py scripts/fieldwork/unit-02-argv0-probe.py
+          /bin/sh -n scripts/fieldwork/unit-02-platform-matrix.sh
+          test -z "$(git status --porcelain)"
+
+      - name: Generate and format exact source candidate
+        run: |
+          set -euo pipefail
+          python scripts/fieldwork/apply-unit-02-last-mile.py | tee "${{ runner.temp }}/candidate-counts.txt"
+          cargo fmt --all
+          git diff --check
+          git diff --name-only | sort > "${{ runner.temp }}/changed-files.txt"
+          cat > "${{ runner.temp }}/expected-files.txt" <<'EOF'
+          crates/uv-install-wheel/src/wheel.rs
+          crates/uv-virtualenv/src/virtualenv.rs
+          crates/uv/src/commands/project/run.rs
+          EOF
+          diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/changed-files.txt"
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('crates/uv/src/commands/project/run.rs').read_text()
+          assert text.count('realpath --') == 1
+          assert text.count('dirname --') == 1
+          assert 'LEGACY_RELOCATABLE_SHEBANG' in text
+          assert 'copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs' in text
+          PY
+          git diff -- \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-virtualenv/src/virtualenv.rs \
+            crates/uv/src/commands/project/run.rs \
+            > "${{ runner.temp }}/candidate.patch"
+          test -s "${{ runner.temp }}/candidate.patch"
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Compile affected crates
+        run: cargo check -p uv-install-wheel -p uv-virtualenv -p uv
+
+      - name: Run wheel shebang test
+        run: cargo test -p uv-install-wheel test_shebang
+
+      - name: Run legacy and current recognizer test
+        run: cargo test -p uv copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs
+
+      - name: Run GNU launcher matrix
+        env:
+          RESULT: ${{ runner.temp }}/unit-02-results.txt
+        run: /bin/sh scripts/fieldwork/unit-02-platform-matrix.sh gnu | tee "$RESULT"
+
+      - name: Run Alpine BusyBox launcher matrix
+        env:
+          RESULT: ${{ runner.temp }}/unit-02-results.txt
+        run: |
+          set -euo pipefail
+          docker run --rm --volume "$PWD:/source:ro" alpine:3.22 \
+            /bin/sh /source/scripts/fieldwork/unit-02-platform-matrix.sh busybox \
+            | tee -a "$RESULT"
+
+      - name: Probe direct shebang argv0 on Linux
+        run: python scripts/fieldwork/unit-02-argv0-probe.py | tee "${{ runner.temp }}/argv0-linux.txt"
+
+      - name: Verify Linux markers
+        env:
+          RESULT: ${{ runner.temp }}/unit-02-results.txt
+        run: |
+          set -euo pipefail
+          grep -F 'UNIT_02_MATRIX=gnu' "$RESULT"
+          grep -F 'UNIT_02_MATRIX=busybox' "$RESULT"
+          grep -F 'UNIT_02_REPLACED=realpath:5,dirname:7' "${{ runner.temp }}/candidate-counts.txt"
+          grep -F 'UNIT_02_LEGACY_RECOGNIZER=realpath:1,dirname:1' "${{ runner.temp }}/candidate-counts.txt"
+          grep -F 'UNIT_02_DIRECT_SHEBANG_ARGV0=script-path' "${{ runner.temp }}/argv0-linux.txt"
+
+      - name: Retain Linux source and receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unit-02-last-mile-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            crates/uv-install-wheel/src/wheel.rs
+            crates/uv-virtualenv/src/virtualenv.rs
+            crates/uv/src/commands/project/run.rs
+            ${{ runner.temp }}/candidate.patch
+            ${{ runner.temp }}/candidate-counts.txt
+            ${{ runner.temp }}/changed-files.txt
+            ${{ runner.temp }}/unit-02-results.txt
+            ${{ runner.temp }}/argv0-linux.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  platform-macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact carrier head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Validate harnesses
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/fieldwork/unit-02-argv0-probe.py
+          /bin/sh -n scripts/fieldwork/unit-02-platform-matrix.sh
+
+      - name: Run macOS launcher matrix
+        run: /bin/sh scripts/fieldwork/unit-02-platform-matrix.sh macos | tee "${{ runner.temp }}/unit-02-macos.txt"
+
+      - name: Probe direct shebang argv0 on macOS
+        run: python scripts/fieldwork/unit-02-argv0-probe.py | tee "${{ runner.temp }}/argv0-macos.txt"
+
+      - name: Verify macOS markers
+        run: |
+          set -euo pipefail
+          grep -F 'UNIT_02_MATRIX=macos' "${{ runner.temp }}/unit-02-macos.txt"
+          grep -F 'UNIT_02_DIRECT_SHEBANG_ARGV0=script-path' "${{ runner.temp }}/argv0-macos.txt"
+
+      - name: Retain macOS receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unit-02-last-mile-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/unit-02-macos.txt
+            ${{ runner.temp }}/argv0-macos.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  publish-source:
+    needs:
+      - source-linux
+      - platform-macos
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact carrier head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Recreate exact formatted candidate
+        run: |
+          set -euo pipefail
+          python scripts/fieldwork/apply-unit-02-last-mile.py
+          cargo fmt --all
+          git diff --check
+          git diff --name-only | sort > "${{ runner.temp }}/published-files.txt"
+          cat > "${{ runner.temp }}/expected-files.txt" <<'EOF'
+          crates/uv-install-wheel/src/wheel.rs
+          crates/uv-virtualenv/src/virtualenv.rs
+          crates/uv/src/commands/project/run.rs
+          EOF
+          diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/published-files.txt"
+
+      - name: Publish one source-only commit
+        env:
+          SOURCE_BASE: 79bbface771210df216b738e9bdc7df95e5a9e6b
+          TARGET_BRANCH: upstream/02-busybox-realpath
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          export GIT_INDEX_FILE="${{ runner.temp }}/unit-02-source.index"
+          rm -f "$GIT_INDEX_FILE"
+          git read-tree "$SOURCE_BASE"
+          git add -- \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-virtualenv/src/virtualenv.rs \
+            crates/uv/src/commands/project/run.rs
+          tree=$(git write-tree)
+          commit=$(printf '%s\n\n%s\n' \
+            'fix: make relocatable launchers compatible with BusyBox realpath' \
+            'Remove unsupported delimiters and keep recognizing previously generated relocatable shebangs.' \
+            | git commit-tree "$tree" -p "$SOURCE_BASE")
+          printf 'source_tree=%s\nsource_commit=%s\n' "$tree" "$commit" | tee "${{ runner.temp }}/source-receipt.txt"
+          git diff-tree --no-commit-id --name-only -r "$commit" | sort > "${{ runner.temp }}/commit-files.txt"
+          diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/commit-files.txt"
+          git push --force origin "$commit:refs/heads/$TARGET_BRANCH"
+
+      - name: Retain publication receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unit-02-last-mile-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/source-receipt.txt
+            ${{ runner.temp }}/commit-files.txt
+          if-no-files-found: error
+          retention-days: 14
