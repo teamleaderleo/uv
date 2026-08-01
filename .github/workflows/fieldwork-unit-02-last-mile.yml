@@ -65,18 +65,22 @@ jobs:
           crates/uv-install-wheel/src/wheel.rs
           crates/uv-virtualenv/src/virtualenv.rs
           crates/uv/src/commands/project/run.rs
+          crates/uv/tests/python/venv.rs
           EOF
           diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/changed-files.txt"
           python - <<'PY'
           from pathlib import Path
-          text = Path('crates/uv/src/commands/project/run.rs').read_text()
-          assert text.count('realpath --') == 2
-          assert text.count('dirname --') == 2
-          assert 'RELOCATABLE_PYTHON3_SHEBANG' in text
-          assert 'LEGACY_RELOCATABLE_PYTHON3_SHEBANG' in text
-          assert 'copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs' in text
+          run = Path('crates/uv/src/commands/project/run.rs').read_text()
+          venv_test = Path('crates/uv/tests/python/venv.rs').read_text()
+          assert run.count('realpath --') == 2
+          assert run.count('dirname --') == 2
+          assert 'RELOCATABLE_PYTHON3_SHEBANG' in run
+          assert 'LEGACY_RELOCATABLE_PYTHON3_SHEBANG' in run
+          assert 'copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs' in run
+          assert 'realpath --' not in venv_test
+          assert 'dirname --' not in venv_test
           PY
-          git diff -- crates/uv-install-wheel/src/wheel.rs crates/uv-virtualenv/src/virtualenv.rs crates/uv/src/commands/project/run.rs > "${{ runner.temp }}/candidate.patch"
+          git diff -- crates/uv-install-wheel/src/wheel.rs crates/uv-virtualenv/src/virtualenv.rs crates/uv/src/commands/project/run.rs crates/uv/tests/python/venv.rs > "${{ runner.temp }}/candidate.patch"
           test -s "${{ runner.temp }}/candidate.patch"
 
       - name: Run source gates
@@ -86,6 +90,7 @@ jobs:
           cargo check -p uv-install-wheel -p uv-virtualenv -p uv
           cargo test -p uv-install-wheel test_shebang
           cargo test -p uv copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs
+          cargo test -p uv --test python --features test-python venv::verify_pyvenv_cfg_relocatable -- --exact
 
       - name: Run GNU and BusyBox launcher matrices
         env:
@@ -113,7 +118,8 @@ jobs:
           grep -F 'UNIT_02_MATRIX=busybox' "$RESULT"
           grep -F 'UNIT_02_ACTIVATION=gnu' "${{ runner.temp }}/activation-gnu.txt"
           grep -F 'UNIT_02_ACTIVATION=busybox' "${{ runner.temp }}/activation-busybox.txt"
-          grep -F 'UNIT_02_REPLACED=realpath:5,dirname:7' "${{ runner.temp }}/candidate-counts.txt"
+          grep -F 'UNIT_02_SOURCE_REPLACED=realpath:5,dirname:7' "${{ runner.temp }}/candidate-counts.txt"
+          grep -F 'UNIT_02_TEST_EXPECTATIONS=realpath:2,dirname:4' "${{ runner.temp }}/candidate-counts.txt"
           grep -F 'UNIT_02_LEGACY_RECOGNIZER=realpath:2,dirname:2' "${{ runner.temp }}/candidate-counts.txt"
           grep -F 'UNIT_02_DIRECT_SHEBANG_ARGV0=script-path' "${{ runner.temp }}/argv0-linux.txt"
 
@@ -126,6 +132,7 @@ jobs:
             crates/uv-install-wheel/src/wheel.rs
             crates/uv-virtualenv/src/virtualenv.rs
             crates/uv/src/commands/project/run.rs
+            crates/uv/tests/python/venv.rs
             ${{ runner.temp }}/candidate.patch
             ${{ runner.temp }}/candidate-counts.txt
             ${{ runner.temp }}/changed-files.txt
@@ -190,6 +197,7 @@ jobs:
           crates/uv-install-wheel/src/wheel.rs
           crates/uv-virtualenv/src/virtualenv.rs
           crates/uv/src/commands/project/run.rs
+          crates/uv/tests/python/venv.rs
           EOF
           diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/published-files.txt"
       - name: Publish one source-only commit
@@ -203,9 +211,9 @@ jobs:
           export GIT_INDEX_FILE="${{ runner.temp }}/unit-02-source.index"
           rm -f "$GIT_INDEX_FILE"
           git read-tree "$SOURCE_BASE"
-          git add -- crates/uv-install-wheel/src/wheel.rs crates/uv-virtualenv/src/virtualenv.rs crates/uv/src/commands/project/run.rs
+          git add -- crates/uv-install-wheel/src/wheel.rs crates/uv-virtualenv/src/virtualenv.rs crates/uv/src/commands/project/run.rs crates/uv/tests/python/venv.rs
           tree=$(git write-tree)
-          commit=$(printf '%s\n\n%s\n' 'fix: make relocatable launchers compatible with BusyBox realpath' 'Remove unsupported delimiters and keep recognizing historical python and python3 relocatable shebangs.' | git commit-tree "$tree" -p "$SOURCE_BASE")
+          commit=$(printf '%s\n\n%s\n' 'fix: make relocatable launchers compatible with BusyBox realpath' 'Remove unsupported delimiters, update relocatable venv expectations, and keep recognizing historical python and python3 shebangs.' | git commit-tree "$tree" -p "$SOURCE_BASE")
           printf 'source_tree=%s\nsource_commit=%s\n' "$tree" "$commit" | tee "${{ runner.temp }}/source-receipt.txt"
           git diff-tree --no-commit-id --name-only -r "$commit" | sort > "${{ runner.temp }}/commit-files.txt"
           diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/commit-files.txt"
