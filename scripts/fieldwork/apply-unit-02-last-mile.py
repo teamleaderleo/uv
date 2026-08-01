@@ -6,26 +6,37 @@ from pathlib import Path
 WHEEL = Path("crates/uv-install-wheel/src/wheel.rs")
 VIRTUALENV = Path("crates/uv-virtualenv/src/virtualenv.rs")
 RUN = Path("crates/uv/src/commands/project/run.rs")
+VENV_TEST = Path("crates/uv/tests/python/venv.rs")
 
-EXPECTED = {
+SOURCE_EXPECTED = {
     WHEEL: {"realpath --": 2, "dirname --": 2},
     VIRTUALENV: {"realpath --": 2, "dirname --": 4},
     RUN: {"realpath --": 1, "dirname --": 1},
 }
+TEST_EXPECTED = {
+    VENV_TEST: {"realpath --": 2, "dirname --": 4},
+}
 
-totals = {"realpath --": 0, "dirname --": 0}
-for path, expected in EXPECTED.items():
-    text = path.read_text()
-    counts = {needle: text.count(needle) for needle in totals}
-    if counts != expected:
-        raise SystemExit(f"unexpected delimiter counts in {path}: {counts} != {expected}")
-    text = text.replace("realpath --", "realpath").replace("dirname --", "dirname")
-    path.write_text(text)
-    for needle, count in counts.items():
-        totals[needle] += count
 
-if totals != {"realpath --": 5, "dirname --": 7}:
-    raise SystemExit(f"unexpected replacement totals: {totals}")
+def replace_delimiters(paths: dict[Path, dict[str, int]]) -> dict[str, int]:
+    totals = {"realpath --": 0, "dirname --": 0}
+    for path, expected in paths.items():
+        text = path.read_text()
+        counts = {needle: text.count(needle) for needle in totals}
+        if counts != expected:
+            raise SystemExit(f"unexpected delimiter counts in {path}: {counts} != {expected}")
+        path.write_text(text.replace("realpath --", "realpath").replace("dirname --", "dirname"))
+        for needle, count in counts.items():
+            totals[needle] += count
+    return totals
+
+
+source_totals = replace_delimiters(SOURCE_EXPECTED)
+test_totals = replace_delimiters(TEST_EXPECTED)
+if source_totals != {"realpath --": 5, "dirname --": 7}:
+    raise SystemExit(f"unexpected source replacement totals: {source_totals}")
+if test_totals != {"realpath --": 2, "dirname --": 4}:
+    raise SystemExit(f"unexpected test replacement totals: {test_totals}")
 
 run_text = RUN.read_text()
 function_marker = "#[cfg(unix)]\nfn copy_entrypoint(\n"
@@ -140,6 +151,9 @@ RUN.write_text(run_text)
 
 if RUN.read_text().count("realpath --") != 2 or RUN.read_text().count("dirname --") != 2:
     raise SystemExit("legacy delimiter forms must remain exactly twice in run.rs")
+if VENV_TEST.read_text().count("realpath --") or VENV_TEST.read_text().count("dirname --"):
+    raise SystemExit("relocatable venv expectations still contain unsupported delimiters")
 
-print("UNIT_02_REPLACED=realpath:5,dirname:7")
+print("UNIT_02_SOURCE_REPLACED=realpath:5,dirname:7")
+print("UNIT_02_TEST_EXPECTATIONS=realpath:2,dirname:4")
 print("UNIT_02_LEGACY_RECOGNIZER=realpath:2,dirname:2")
