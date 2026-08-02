@@ -20,8 +20,8 @@ concurrency:
 
 jobs:
   publish-source:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -39,7 +39,11 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test "$(git merge-base "$EXECUTION_BASE" HEAD)" = "$EXECUTION_BASE"
           git diff --name-only "$VALIDATED_CARRIER"...HEAD | sort -u > "${{ runner.temp }}/post-validation-delta.txt"
-          test "$(cat "${{ runner.temp }}/post-validation-delta.txt")" = '.github/workflows/fieldwork-unit-02-last-mile.yml'
+          cat > "${{ runner.temp }}/expected-post-validation-delta.txt" <<'EOF'
+          .github/workflows/fieldwork-unit-02-last-mile.yml
+          scripts/fieldwork/apply-unit-02-last-mile.py
+          EOF
+          diff -u "${{ runner.temp }}/expected-post-validation-delta.txt" "${{ runner.temp }}/post-validation-delta.txt"
           git diff --name-only "$EXECUTION_BASE"...HEAD | sort > "${{ runner.temp }}/carrier-files.txt"
           cat > "${{ runner.temp }}/expected-carrier-files.txt" <<'EOF'
           .github/workflows/fieldwork-unit-02-isolated.yml
@@ -54,12 +58,10 @@ jobs:
           /bin/sh -n scripts/fieldwork/unit-02-platform-matrix.sh
           /bin/bash -n scripts/fieldwork/unit-02-activation-probe.sh
 
-      - name: Recreate exact validated source
+      - name: Recreate byte-identical validated source
         run: |
           set -euo pipefail
-          rustup component add rustfmt
           python scripts/fieldwork/apply-unit-02-last-mile.py | tee "${{ runner.temp }}/candidate-counts.txt"
-          cargo fmt --all
           git diff --check
           git diff --name-only | sort > "${{ runner.temp }}/published-files.txt"
           cat > "${{ runner.temp }}/expected-files.txt" <<'EOF'
@@ -69,6 +71,10 @@ jobs:
           crates/uv/tests/python/venv.rs
           EOF
           diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/published-files.txt"
+          test "$(git hash-object crates/uv-install-wheel/src/wheel.rs)" = 49c04343714990cfbc8bf891162b4889678b08f5
+          test "$(git hash-object crates/uv-virtualenv/src/virtualenv.rs)" = b251b09b63771e6833b872ef05003e5290501bd3
+          test "$(git hash-object crates/uv/src/commands/project/run.rs)" = 91bfe0517944f19aa3ac79f6788619131cd07949
+          test "$(git hash-object crates/uv/tests/python/venv.rs)" = f68dc858066242be1888b922262d53e22975856a
           grep -F 'UNIT_02_SOURCE_REALPATH_REPLACED=5' "${{ runner.temp }}/candidate-counts.txt"
           grep -F 'UNIT_02_TEST_REALPATH_EXPECTATIONS=2' "${{ runner.temp }}/candidate-counts.txt"
           grep -F 'UNIT_02_LEGACY_REALPATH_RECOGNIZER=2' "${{ runner.temp }}/candidate-counts.txt"
