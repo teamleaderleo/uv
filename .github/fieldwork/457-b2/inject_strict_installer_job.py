@@ -32,6 +32,7 @@ replacement = '''async fn execute_official_installer(
     .await
 }
 
+#[allow(unsafe_code)]
 async fn execute_official_installer_with_assignment_callback<F>(
     installer_path: &Path,
     install_prefix: &Path,
@@ -52,7 +53,7 @@ text = text.replace(signature, replacement, 1)
 output_line = "    let output = command.output().await?;"
 output_replacement = '''    #[cfg(windows)]
     let output = {
-        let mut child = command.spawn()?;
+        let child = command.spawn()?;
         let raw_handle = child.raw_handle().ok_or_else(|| {
             std::io::Error::other("installer exited before Job Object assignment")
         })?;
