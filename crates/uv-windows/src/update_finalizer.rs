@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{INFINITE, OpenProcess, SYNCHRONIZE, WaitForSingleObject};
 
 /// Options used by the experimental deferred update finalizer.
@@ -55,6 +55,41 @@ struct UpdateJournal {
     phase: UpdatePhase,
 }
 
+struct ProcessHandle {
+    handle: HANDLE,
+}
+
+impl ProcessHandle {
+    #[allow(unsafe_code)]
+    fn open(process_id: u32) -> io::Result<Self> {
+        // SAFETY: OpenProcess is called with a concrete PID and synchronization-only access.
+        // The returned handle is owned by this wrapper and closed in Drop.
+        let handle = unsafe { OpenProcess(SYNCHRONIZE, false, process_id) }
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        Ok(Self { handle })
+    }
+
+    #[allow(unsafe_code)]
+    fn wait(&self) -> io::Result<()> {
+        // SAFETY: self.handle remains valid for the lifetime of this wrapper.
+        let wait_result = unsafe { WaitForSingleObject(self.handle, INFINITE) };
+        if wait_result != WAIT_OBJECT_0 {
+            return Err(io::Error::other(format!(
+                "waiting for parent process returned {wait_result:?}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ProcessHandle {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        // SAFETY: this wrapper owns the process handle and closes it exactly once.
+        let _ = unsafe { CloseHandle(self.handle) };
+    }
+}
+
 /// Stage a replacement next to the canonical file, wait for the parent process to exit,
 /// then commit the replacement with an explicit backup and ordinary-error rollback.
 ///
@@ -70,6 +105,11 @@ pub fn finalize_update_after_process_exit(
 ) -> io::Result<()> {
     ensure_regular_file(canonical, "canonical executable")?;
     ensure_regular_file(replacement, "staged replacement")?;
+
+    // Acquire synchronization authority before any slow staging work. If the parent exits while
+    // bytes are copied, this handle still refers to that exact process instead of reopening a PID
+    // that may already be gone or reused.
+    let parent_process = ProcessHandle::open(parent_process_id)?;
 
     let parent = canonical.parent().ok_or_else(|| {
         io::Error::new(
@@ -104,9 +144,13 @@ pub fn finalize_update_after_process_exit(
     // while the old canonical executable is still present and runnable.
     fs::copy(replacement, &journal.staged)?;
     sync_file(&journal.staged)?;
-    write_journal(&journal_path, &journal)?;
+    if let Err(error) = write_journal(&journal_path, &journal) {
+        remove_if_exists(&journal.staged).ok();
+        remove_if_exists(&journal_path).ok();
+        return Err(error);
+    }
 
-    wait_for_process_exit(parent_process_id)?;
+    parent_process.wait()?;
 
     fs::rename(&journal.canonical, &journal.backup)?;
     journal.phase = UpdatePhase::OldBackedUp;
@@ -132,7 +176,9 @@ pub fn finalize_update_after_process_exit(
     }
 
     journal.phase = UpdatePhase::Committed;
-    write_journal(&journal_path, &journal)?;
+    if let Err(error) = write_journal(&journal_path, &journal) {
+        return rollback_after_error(&journal_path, &journal, error);
+    }
 
     remove_if_exists(&journal.backup)?;
     remove_if_exists(&journal.staged)?;
@@ -338,19 +384,4 @@ fn remove_if_exists(path: &Path) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
-}
-
-fn wait_for_process_exit(process_id: u32) -> io::Result<()> {
-    let handle = unsafe { OpenProcess(SYNCHRONIZE, false, process_id) }
-        .map_err(|error| io::Error::other(error.to_string()))?;
-    let wait_result = unsafe { WaitForSingleObject(handle, INFINITE) };
-    let close_result = unsafe { CloseHandle(handle) };
-
-    close_result.map_err(|error| io::Error::other(error.to_string()))?;
-    if wait_result != WAIT_OBJECT_0 {
-        return Err(io::Error::other(format!(
-            "waiting for parent process {process_id} returned {wait_result:?}"
-        )));
-    }
-    Ok(())
 }
