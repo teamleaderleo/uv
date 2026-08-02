@@ -93,14 +93,15 @@ record_lock() {
   local order=$3
   local cache_state=$4
 
-  python3 - "$case_dir/project/uv.lock" "$UV_VERSION" "$mode" "$order" "$cache_state" >> "$results" <<'PY'
+  python3 - "$case_dir/project/uv.lock" "$case_dir" "$UV_VERSION" "$mode" "$order" "$cache_state" >> "$results" <<'PY'
 import json
 import os
 import pathlib
 import sys
 import tomllib
 
-lock_path, uv_version, mode, order, cache_state = sys.argv[1:]
+lock_path, case_dir, uv_version, mode, order, cache_state = sys.argv[1:]
+case_root = pathlib.Path(case_dir)
 data = tomllib.loads(pathlib.Path(lock_path).read_text())
 packages = {package["name"]: package for package in data["package"]}
 child = packages["child"]
@@ -115,6 +116,17 @@ def path_value(mapping):
             return key, mapping[key]
     return None, None
 
+def normalized(value):
+    if not value:
+        return value
+    path = pathlib.Path(value)
+    if not path.is_absolute():
+        return value
+    try:
+        return f"<CASE>/{path.relative_to(case_root).as_posix()}"
+    except ValueError:
+        return f"<ABS>/{path.name}"
+
 source_kind, source_path = path_value(source)
 metadata_kind, metadata_path = path_value(parent_child)
 record = {
@@ -124,9 +136,11 @@ record = {
     "cache_state": cache_state,
     "child_source_kind": source_kind,
     "child_source_path": source_path,
+    "child_source_normalized": normalized(source_path),
     "child_source_absolute": bool(source_path and os.path.isabs(source_path)),
     "parent_metadata_kind": metadata_kind,
     "parent_metadata_path": metadata_path,
+    "parent_metadata_normalized": normalized(metadata_path),
     "parent_metadata_absolute": bool(metadata_path and os.path.isabs(metadata_path)),
 }
 print(json.dumps(record, sort_keys=True))
@@ -169,10 +183,10 @@ lines = [
     "| --- | --- | --- | --- | --- |",
 ]
 for record in records:
-    source = f"{record['child_source_kind']}={record['child_source_path']}"
+    source = f"{record['child_source_kind']}={record['child_source_normalized']}"
     if record["child_source_absolute"]:
         source += " **ABSOLUTE**"
-    metadata = f"{record['parent_metadata_kind']}={record['parent_metadata_path']}"
+    metadata = f"{record['parent_metadata_kind']}={record['parent_metadata_normalized']}"
     if record["parent_metadata_absolute"]:
         metadata += " **ABSOLUTE**"
     lines.append(
@@ -189,15 +203,51 @@ for mode in ("editable", "noneditable"):
             if record["mode"] == mode and record["cache_state"] == cache_state
         ]
         source_values = {
-            (record["child_source_kind"], record["child_source_path"])
+            (
+                record["child_source_kind"],
+                record["child_source_normalized"],
+                record["child_source_absolute"],
+            )
             for record in selected
         }
         metadata_values = {
-            (record["parent_metadata_kind"], record["parent_metadata_path"])
+            (
+                record["parent_metadata_kind"],
+                record["parent_metadata_normalized"],
+                record["parent_metadata_absolute"],
+            )
             for record in selected
         }
         lines.append(
             f"- `{mode}` / `{cache_state}`: dependency-order invariant source="
+            f"`{len(source_values) == 1}`, metadata=`{len(metadata_values) == 1}`."
+        )
+
+for mode in ("editable", "noneditable"):
+    for order in ("parent-first", "child-first"):
+        selected = [
+            record
+            for record in records
+            if record["mode"] == mode and record["dependency_order"] == order
+        ]
+        source_values = {
+            (
+                record["child_source_kind"],
+                record["child_source_normalized"],
+                record["child_source_absolute"],
+            )
+            for record in selected
+        }
+        metadata_values = {
+            (
+                record["parent_metadata_kind"],
+                record["parent_metadata_normalized"],
+                record["parent_metadata_absolute"],
+            )
+            for record in selected
+        }
+        lines.append(
+            f"- `{mode}` / `{order}`: cold-warm invariant source="
             f"`{len(source_values) == 1}`, metadata=`{len(metadata_values) == 1}`."
         )
 
