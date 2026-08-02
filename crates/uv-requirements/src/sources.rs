@@ -191,7 +191,7 @@ impl RequirementsSource {
     }
 
     /// Parse a [`RequirementsSource`] from a user-provided string, assumed to be a positional
-    /// package (e.g., `pip install flask`).
+    /// package (e.g., `uv pip install flask`).
     ///
     /// If the user provided a value that appears to be a `requirements.txt` file or a local
     /// directory, prompt them to correct it (if the terminal is interactive).
@@ -290,7 +290,7 @@ impl RequirementsSource {
         Ok(Self::Package(requirement))
     }
 
-    /// Parse an editable [`RequirementsSource`] (e.g., `pip install -e .`).
+    /// Parse an editable [`RequirementsSource`] (e.g., `uv pip install -e .`).
     pub fn from_editable(name: &str) -> Result<Self> {
         let requirement = RequirementsTxtRequirement::parse(name, &*CWD, true)
             .with_context(|| format!("Failed to parse: `{name}`"))?;
@@ -298,7 +298,7 @@ impl RequirementsSource {
         Ok(Self::Editable(requirement))
     }
 
-    /// Parse a package [`RequirementsSource`] (e.g., `pip install ruff`).
+    /// Parse a package [`RequirementsSource`] (e.g., `uv pip install ruff`).
     pub fn from_package(name: &str) -> Result<Self> {
         let requirement = RequirementsTxtRequirement::parse(name, &*CWD, false)
             .with_context(|| format!("Failed to parse: `{name}`"))?;
