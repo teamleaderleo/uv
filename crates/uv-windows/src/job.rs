@@ -116,6 +116,7 @@ impl Job {
     ///
     /// Caller must ensure raw handle refers to live process for duration of call.
     #[cfg(feature = "std")]
+    #[allow(unsafe_code)]
     pub unsafe fn assign_raw_process_handle(
         &self,
         raw_handle: *mut c_void,
