@@ -99,7 +99,6 @@ tests = r'''
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
 
@@ -112,11 +111,11 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let source = temp_dir.path().join("source-entrypoint");
         let target = temp_dir.path().join("target-entrypoint");
-        fs::write(&source, format!("{shebang}print('probe')\n")).unwrap();
+        fs_err::write(&source, format!("{shebang}print('probe')\n")).unwrap();
 
-        let mut permissions = fs::metadata(&source).unwrap().permissions();
+        let mut permissions = fs_err::metadata(&source).unwrap().permissions();
         permissions.set_mode(0o751);
-        fs::set_permissions(&source, permissions).unwrap();
+        fs_err::set_permissions(&source, permissions).unwrap();
 
         copy_entrypoint(
             &source,
@@ -127,10 +126,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            fs::read_to_string(&target).unwrap(),
+            fs_err::read_to_string(&target).unwrap(),
             "#!/new/environment/bin/python\nprint('probe')\n"
         );
-        assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o751);
+        assert_eq!(
+            fs_err::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o751
+        );
     }
 
     #[test]
