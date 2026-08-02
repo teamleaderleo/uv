@@ -44,7 +44,7 @@ jobs:
           git diff --check "$SOURCE_BASE"..."$SOURCE_SHA"
           test -z "$(git status --porcelain)"
 
-      - name: Apply parse-failure diagnostic experiment
+      - name: Apply scoped parse-failure diagnostic experiment
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -101,12 +101,56 @@ jobs:
           ''',
               "",
           )
+          replace_once(
+              sources,
+              '''    /// Dependencies were provided via a `requirements.txt` file (e.g., `pip install -r requirements.txt`).
+              RequirementsTxt(PathBuf),
+          ''',
+              '''    /// Dependencies were provided via a `requirements.txt` file.
+              RequirementsTxt(PathBuf),
+              /// Dependencies were provided via an explicit requirements-file flag such as `-r`.
+              /// Parse failures on this lane can include diagnostics for uv-owned lockfile names.
+              RequirementsTxtWithUvLockDiagnostic(PathBuf),
+          ''',
+          )
+          replace_once(
+              sources,
+              '''        Ok(Self::RequirementsTxt(path))
+              }
+
+              /// Parse a [`RequirementsSource`] from a `constraints.txt` file.
+          ''',
+              '''        Ok(Self::RequirementsTxtWithUvLockDiagnostic(path))
+              }
+
+              /// Parse a [`RequirementsSource`] from a `constraints.txt` file.
+          ''',
+          )
+          replace_once(
+              sources,
+              '''            Self::PylockToml(path)
+                          | Self::RequirementsTxt(path)
+                          | Self::Pep723Script(path)
+          ''',
+              '''            Self::PylockToml(path)
+                          | Self::RequirementsTxt(path)
+                          | Self::RequirementsTxtWithUvLockDiagnostic(path)
+                          | Self::Pep723Script(path)
+          ''',
+          )
 
           specification = Path("crates/uv-requirements/src/specification.rs")
           replace_once(
               specification,
               "use std::collections::BTreeMap;\nuse std::path::{Path, PathBuf};\n",
               "use std::collections::BTreeMap;\nuse std::ffi::OsStr;\nuse std::path::{Path, PathBuf};\n",
+          )
+          replace_once(
+              specification,
+              "            RequirementsSource::RequirementsTxt(path) => {\n",
+              '''            RequirementsSource::RequirementsTxt(path)
+                          | RequirementsSource::RequirementsTxtWithUvLockDiagnostic(path) => {
+          ''',
           )
           replace_once(
               specification,
@@ -118,7 +162,12 @@ jobs:
                                   .await
                               {
                                   Ok(requirements_txt) => requirements_txt,
-                                  Err(_) if is_uv_lockfile(path) => {
+                                  Err(_)
+                                      if matches!(
+                                          source,
+                                          RequirementsSource::RequirementsTxtWithUvLockDiagnostic(_)
+                                      ) && is_uv_lockfile(path) =>
+                                  {
                                       return Err(anyhow::anyhow!(
                                           "The file `{}` appears to be a uv lockfile, but requirements must be specified in `requirements.txt` format",
                                           path.user_display(),
@@ -134,8 +183,8 @@ jobs:
               '''
           /// Returns `true` if the path follows a lockfile naming convention that uv itself emits.
           ///
-          /// This check only runs after requirements parsing fails, so a valid requirements file keeps
-          /// its ordinary meaning even when its name overlaps with a uv lockfile convention.
+          /// Callers use this only after requirements parsing fails. Valid requirements files retain
+          /// their ordinary meaning even when their names overlap with uv lockfile conventions.
           fn is_uv_lockfile(path: &Path) -> bool {
               if !path.is_file() {
                   return false;
@@ -245,6 +294,35 @@ jobs:
                   .assert()
                   .failure()
                   .stderr(predicates::str::contains("appears to be a uv lockfile"));
+
+              Ok(())
+          }
+
+          #[test]
+          fn preserve_constraint_parse_error_for_uv_script_lock() -> Result<()> {
+              use predicates::prelude::*;
+
+              let context = uv_test::test_context!("3.12");
+              context.temp_dir.child("action.py").write_str(
+                  "# /// script\n# dependencies = []\n# ///\n\nprint('hello')\n",
+              )?;
+              context
+                  .lock()
+                  .arg("--script")
+                  .arg("action.py")
+                  .assert()
+                  .success();
+
+              context
+                  .pip_install()
+                  .arg("-c")
+                  .arg("action.py.lock")
+                  .arg("anyio")
+                  .arg("--strict")
+                  .assert()
+                  .failure()
+                  .stderr(predicates::str::contains("Couldn't parse requirement"))
+                  .stderr(predicates::str::contains("appears to be a uv lockfile").not());
 
               Ok(())
           }
