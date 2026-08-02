@@ -6,6 +6,7 @@ use console::Term;
 
 use uv_fs::{CWD, Simplified};
 use uv_requirements_txt::RequirementsTxtRequirement;
+use uv_scripts::Pep723Metadata;
 
 #[derive(Debug, Clone)]
 pub enum RequirementsSource {
@@ -100,6 +101,11 @@ impl RequirementsSource {
                 "The file `{}` appears to be a `pylock.toml` file, but requirements must be specified in `requirements.txt` format",
                 path.user_display(),
             ));
+        } else if is_uv_lockfile(&path) {
+            return Err(anyhow::anyhow!(
+                "The file `{}` appears to be a uv lockfile, but requirements must be specified in `requirements.txt` format",
+                path.user_display(),
+            ));
         } else if path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
@@ -185,7 +191,7 @@ impl RequirementsSource {
     }
 
     /// Parse a [`RequirementsSource`] from a user-provided string, assumed to be a positional
-    /// package (e.g., `uv pip install flask`).
+    /// package (e.g., `pip install flask`).
     ///
     /// If the user provided a value that appears to be a `requirements.txt` file or a local
     /// directory, prompt them to correct it (if the terminal is interactive).
@@ -284,7 +290,7 @@ impl RequirementsSource {
         Ok(Self::Package(requirement))
     }
 
-    /// Parse an editable [`RequirementsSource`] (e.g., `uv pip install -e .`).
+    /// Parse an editable [`RequirementsSource`] (e.g., `pip install -e .`).
     pub fn from_editable(name: &str) -> Result<Self> {
         let requirement = RequirementsTxtRequirement::parse(name, &*CWD, true)
             .with_context(|| format!("Failed to parse: `{name}`"))?;
@@ -292,7 +298,7 @@ impl RequirementsSource {
         Ok(Self::Editable(requirement))
     }
 
-    /// Parse a package [`RequirementsSource`] (e.g., `uv pip install ruff`).
+    /// Parse a package [`RequirementsSource`] (e.g., `pip install ruff`).
     pub fn from_package(name: &str) -> Result<Self> {
         let requirement = RequirementsTxtRequirement::parse(name, &*CWD, false)
             .with_context(|| format!("Failed to parse: `{name}`"))?;
@@ -338,4 +344,29 @@ pub fn is_pylock_toml(file_name: &str) -> bool {
         .strip_prefix("pylock.")
         .and_then(|name| name.strip_suffix(".toml"))
         .is_some_and(|name| !name.is_empty() && !name.contains('.'))
+}
+
+/// Returns `true` if the path names a lockfile that uv itself can generate.
+fn is_uv_lockfile(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+
+    let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+
+    if file_name == "uv.lock" {
+        return true;
+    }
+
+    let Some(script_name) = file_name.strip_suffix(".lock").filter(|name| !name.is_empty()) else {
+        return false;
+    };
+    let script_path = path.with_file_name(script_name);
+    let Ok(contents) = fs_err::read(script_path) else {
+        return false;
+    };
+
+    Pep723Metadata::parse(&contents).is_ok_and(|metadata| metadata.is_some())
 }
