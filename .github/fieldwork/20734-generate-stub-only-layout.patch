@@ -1,0 +1,139 @@
+diff --git a/crates/uv/src/commands/project/init.rs b/crates/uv/src/commands/project/init.rs
+--- a/crates/uv/src/commands/project/init.rs
++++ b/crates/uv/src/commands/project/init.rs
+@@ -744,6 +744,13 @@ impl InitProjectKind {
+     ) -> Result<()> {
+         fs_err::create_dir_all(path)?;
+ 
++        // PEP 561 stub-only distributions cannot provide a runnable package entrypoint.
++        // Treat the packaged-application default as a library when the distribution name
++        // uses the conventional `-stubs` suffix.
++        let project_kind = if matches!(self, Self::ApplicationWithLibrary)
++            && name.as_str().ends_with("-stubs")
++        {
++            Self::Library
++        } else {
++            self
++        };
++
+         // Initialize the version control system first so that Git configuration can properly
+         // read conditional includes that depend on the repository path.
+         init_vcs(path, vcs)?;
+@@ -751,7 +758,7 @@ impl InitProjectKind {
+         // Do not fill in `authors` for non-packaged applications unless explicitly requested.
+-        let author_from = author_from.unwrap_or_else(|| match self {
++        let author_from = author_from.unwrap_or_else(|| match project_kind {
+             Self::ApplicationWithLibrary | Self::Library | Self::BareWithBuildSystem => {
+                 AuthorFrom::default()
+             }
+@@ -771,7 +778,7 @@ impl InitProjectKind {
+             no_readme || bare,
+         );
+ 
+-        match self {
++        match project_kind {
+             // Create only the most barebones `pyproject.toml`, no build system
+             Self::Bare => {}
+@@ -1045,10 +1052,35 @@ fn generate_package_scripts(
+     build_backend: ProjectBuildBackend,
+     is_lib: bool,
+ ) -> Result<()> {
+-    let module_name = package.as_dist_info_name();
++    let package_name = package.to_string();
++    let stubs_stem = package_name.strip_suffix("-stubs");
++    let module_name = if let Some(stem) = stubs_stem {
++        let module_name = PackageName::from_str(stem)
++            .expect("non-empty package name prefix must be valid package name")
++            .as_dist_info_name();
++        format!("{module_name}-stubs")
++    } else {
++        package.as_dist_info_name().to_string()
++    };
+ 
+     let src_dir = path.join("src");
+-    let pkg_dir = src_dir.join(&*module_name);
++    let pkg_dir = src_dir.join(&module_name);
+     fs_err::create_dir_all(&pkg_dir)?;
++
++    if stubs_stem.is_some() {
++        let init_pyi = pkg_dir.join("__init__.pyi");
++        if !init_pyi.try_exists()? {
++            let contents = if is_lib {
++                indoc::indoc! {r"
++                    def hello() -> str: ...
++                "}
++            } else {
++                indoc::indoc! {r"
++                    def main() -> None: ...
++                "}
++            };
++            fs_err::write(init_pyi, contents)?;
++        }
++        return Ok(());
++    }
+ 
+     let pure_python_script = if is_lib {
+         indoc::formatdoc! {r#"
+diff --git a/crates/uv/tests/project/init.rs b/crates/uv/tests/project/init.rs
+--- a/crates/uv/tests/project/init.rs
++++ b/crates/uv/tests/project/init.rs
+@@ -333,6 +333,62 @@ fn init_package() -> Result<()> {
+     Ok(())
+ }
++
++#[test]
++fn init_stubs_package() -> Result<()> {
++    let context = uv_test::test_context!("3.12");
++
++    uv_snapshot!(
++        context.filters(),
++        context.init().arg("--package").arg("foo-stubs"),
++        @"
++    exit_code: 0 (success)
++    ----- stderr -----
++    Initialized project `foo-stubs` at `[TEMP_DIR]/foo-stubs`
++    "
++    );
++
++    let pyproject = context.read("foo-stubs/pyproject.toml");
++    insta::with_settings!({
++        filters => context.filters(),
++    }, {
++        assert_snapshot!(
++            pyproject, @r#"
++        [project]
++        name = "foo-stubs"
++        version = "0.1.0"
++        description = "Add your description here"
++        readme = "README.md"
++        requires-python = ">=3.12"
++        dependencies = []
++
++        [build-system]
++        requires = ["uv_build>=[CURRENT_VERSION],<[NEXT_BREAKING]"]
++        build-backend = "uv_build"
++        "#
++        );
++    });
++
++    let init_pyi = context.read("foo-stubs/src/foo-stubs/__init__.pyi");
++    assert_snapshot!(
++        init_pyi, @r#"
++    def hello() -> str: ...
++    "#
++    );
++
++    context
++        .temp_dir
++        .child("foo-stubs/src/foo_stubs/__init__.py")
++        .assert(predicate::path::missing());
++    context
++        .temp_dir
++        .child("foo-stubs/src/foo-stubs/py.typed")
++        .assert(predicate::path::missing());
++
++    Ok(())
++}
+ 
+ #[test]
+ fn init_bare_lib() {
