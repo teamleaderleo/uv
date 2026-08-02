@@ -96,14 +96,14 @@ jobs:
           }
 
           function Assert-Content($path, $expected, $message) {
-            if (-not (Test-Path -LiteralPath $path)) { throw "$message: file is absent" }
+            if (-not (Test-Path -LiteralPath $path)) { throw "$message - file is absent" }
             if ((Get-Content -Raw -LiteralPath $path) -ne $expected) {
-              throw "$message: unexpected content"
+              throw "$message - unexpected content"
             }
           }
 
           function Assert-Absent($path, $message) {
-            if (Test-Path -LiteralPath $path) { throw "$message: $path still exists" }
+            if (Test-Path -LiteralPath $path) { throw "$message - $path still exists" }
           }
 
           # PREPARED: old canonical is authoritative; discard uncommitted stage.
