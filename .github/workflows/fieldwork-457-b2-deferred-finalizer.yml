@@ -1,0 +1,177 @@
+name: Fieldwork 457 B2 deferred Windows finalizer
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/fieldwork-457-b2-deferred-finalizer.yml
+      - crates/uv-windows/src/lib.rs
+      - crates/uv-windows/src/update_finalizer.rs
+      - crates/uv/src/bin/fieldwork_deferred_update_finalizer.rs
+
+permissions:
+  contents: read
+
+jobs:
+  deferred-finalizer:
+    name: Windows staged finalize-after-exit prototype
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CANDIDATE_HEAD: 77e107dd2665f660c461998bc83174bf26ee7cf6
+      CI: 1
+    steps:
+      - name: Check out exact experiment head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source and experiment fence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git merge-base HEAD $env:CANDIDATE_HEAD) -ne $env:CANDIDATE_HEAD) {
+            throw 'Experiment does not descend from exact candidate head'
+          }
+          $expected = @(
+            '.github/workflows/fieldwork-457-b2-deferred-finalizer.yml'
+            'crates/uv-windows/src/lib.rs'
+            'crates/uv-windows/src/update_finalizer.rs'
+            'crates/uv/src/bin/fieldwork_deferred_update_finalizer.rs'
+          ) | Sort-Object
+          $changed = @(git diff --name-only "$env:CANDIDATE_HEAD..HEAD") | Sort-Object
+          if (Compare-Object $expected $changed) {
+            throw "Unexpected experiment diff. Expected: $($expected -join ', '); actual: $($changed -join ', ')"
+          }
+          git diff --check "$env:CANDIDATE_HEAD..HEAD"
+          New-Item -ItemType Directory -Force -Path receipt | Out-Null
+          @(
+            "experiment_head=$(git rev-parse HEAD)"
+            "candidate_head=$env:CANDIDATE_HEAD"
+            "runner=$env:RUNNER_OS"
+          ) | Set-Content receipt/identity.txt
+          rustc --version | Tee-Object -FilePath receipt/rust-version.txt
+          cargo --version | Tee-Object -FilePath receipt/cargo-version.txt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          shared-key: fieldwork-457-b2-deferred-finalizer
+          cache-on-failure: true
+
+      - name: Build and lint prototype
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo fmt --all --check 2>&1 | Tee-Object -FilePath receipt/fmt.log
+          cargo build -p uv --bin fieldwork_deferred_update_finalizer --features self-update 2>&1 |
+            Tee-Object -FilePath receipt/build.log
+
+      - name: Run hostile finalization matrix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $helper = Join-Path $env:GITHUB_WORKSPACE 'target/debug/fieldwork_deferred_update_finalizer.exe'
+          $matrixRoot = Join-Path $env:RUNNER_TEMP 'deferred-finalizer-matrix'
+          New-Item -ItemType Directory -Force -Path $matrixRoot | Out-Null
+
+          function Start-Blocker {
+            Start-Process -FilePath 'powershell' -ArgumentList @(
+              '-NoProfile',
+              '-Command',
+              'Start-Sleep -Seconds 60'
+            ) -PassThru -WindowStyle Hidden
+          }
+
+          function Start-Finalizer($name, $parentId, $canonical, $replacement, $extraArgs) {
+            $stdout = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-stdout.txt"
+            $stderr = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-stderr.txt"
+            $arguments = @("$parentId", $canonical, $replacement) + $extraArgs
+            Start-Process -FilePath $helper -ArgumentList $arguments -PassThru -NoNewWindow `
+              -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          }
+
+          # Control 1: all staging occurs while the old canonical file remains available;
+          # replacement commits only after the parent exits.
+          $deferredDir = Join-Path $matrixRoot 'deferred'
+          New-Item -ItemType Directory -Force -Path $deferredDir | Out-Null
+          $deferredCanonical = Join-Path $deferredDir 'uv.exe'
+          $deferredReplacement = Join-Path $matrixRoot 'new-uv.exe'
+          Set-Content -NoNewline -Path $deferredCanonical -Value 'old-version'
+          Set-Content -NoNewline -Path $deferredReplacement -Value 'new-version'
+          $deferredBlocker = Start-Blocker
+          $deferredHelper = Start-Finalizer 'deferred' $deferredBlocker.Id $deferredCanonical $deferredReplacement @()
+          Start-Sleep -Seconds 1
+          if ($deferredHelper.HasExited) { throw 'finalizer exited before its parent' }
+          if ((Get-Content -Raw $deferredCanonical) -ne 'old-version') {
+            throw 'canonical file changed while parent was still running'
+          }
+          Stop-Process -Id $deferredBlocker.Id -Force
+          $deferredHelper.WaitForExit(15000)
+          if (-not $deferredHelper.HasExited -or $deferredHelper.ExitCode -ne 0) {
+            throw "deferred finalizer failed: exited=$($deferredHelper.HasExited) code=$($deferredHelper.ExitCode)"
+          }
+          if ((Get-Content -Raw $deferredCanonical) -ne 'new-version') {
+            throw 'replacement was not committed after parent exit'
+          }
+          if (Get-ChildItem -LiteralPath $deferredDir -Force | Where-Object Name -Match 'update-(stage|backup|journal)') {
+            throw 'successful finalization left transaction files behind'
+          }
+
+          # Control 2: a missing replacement fails before waiting and before touching canonical.
+          $missingDir = Join-Path $matrixRoot 'missing'
+          New-Item -ItemType Directory -Force -Path $missingDir | Out-Null
+          $missingCanonical = Join-Path $missingDir 'uv.exe'
+          $missingReplacement = Join-Path $matrixRoot 'does-not-exist.exe'
+          Set-Content -NoNewline -Path $missingCanonical -Value 'old-version'
+          $missingBlocker = Start-Blocker
+          $missingHelper = Start-Finalizer 'missing' $missingBlocker.Id $missingCanonical $missingReplacement @()
+          $missingHelper.WaitForExit(15000)
+          if (-not $missingHelper.HasExited -or $missingHelper.ExitCode -ne 42) {
+            throw "missing-stage control returned unexpected result: exited=$($missingHelper.HasExited) code=$($missingHelper.ExitCode)"
+          }
+          if ($missingBlocker.HasExited) { throw 'missing-stage control unexpectedly waited for parent exit' }
+          if ((Get-Content -Raw $missingCanonical) -ne 'old-version') {
+            throw 'missing-stage control changed canonical file'
+          }
+          Stop-Process -Id $missingBlocker.Id -Force
+
+          # Control 3: an ordinary failure after backup restores the old canonical file.
+          $rollbackDir = Join-Path $matrixRoot 'rollback'
+          New-Item -ItemType Directory -Force -Path $rollbackDir | Out-Null
+          $rollbackCanonical = Join-Path $rollbackDir 'uv.exe'
+          $rollbackReplacement = Join-Path $matrixRoot 'rollback-new-uv.exe'
+          Set-Content -NoNewline -Path $rollbackCanonical -Value 'old-version'
+          Set-Content -NoNewline -Path $rollbackReplacement -Value 'new-version'
+          $rollbackBlocker = Start-Blocker
+          $rollbackHelper = Start-Finalizer 'rollback' $rollbackBlocker.Id $rollbackCanonical $rollbackReplacement @('--fail-after-backup')
+          Start-Sleep -Seconds 1
+          if ((Get-Content -Raw $rollbackCanonical) -ne 'old-version') {
+            throw 'rollback control changed canonical file before parent exit'
+          }
+          Stop-Process -Id $rollbackBlocker.Id -Force
+          $rollbackHelper.WaitForExit(15000)
+          if (-not $rollbackHelper.HasExited -or $rollbackHelper.ExitCode -ne 42) {
+            throw "rollback control returned unexpected result: exited=$($rollbackHelper.HasExited) code=$($rollbackHelper.ExitCode)"
+          }
+          if ((Get-Content -Raw $rollbackCanonical) -ne 'old-version') {
+            throw 'ordinary commit failure did not restore old canonical file'
+          }
+          if (Get-ChildItem -LiteralPath $rollbackDir -Force | Where-Object Name -Match 'update-(stage|backup|journal)') {
+            throw 'rollback left transaction files behind'
+          }
+
+          @{
+            deferredCommit = 'pass'
+            missingStageFailsBeforeCanonicalMutation = 'pass'
+            ordinaryCommitFailureRollsBack = 'pass'
+          } | ConvertTo-Json | Set-Content receipt/matrix.json
+
+      - name: Upload exact receipt
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: fieldwork-457-b2-deferred-finalizer
+          path: receipt/
+          if-no-files-found: error
+          retention-days: 30
