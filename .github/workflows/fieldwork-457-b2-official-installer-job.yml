@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  JOB_EXPERIMENT_BASE: c9523e056abf72eeb073a93c4668e769d293f8a8
+  JOB_EXPERIMENT_BASE: 6098dab64d959f9cf40fb44bbd8d4849c3aa9239
   PUBLIC_CANDIDATE: 77e107dd2665f660c461998bc83174bf26ee7cf6
   CI: 1
 
@@ -134,7 +134,7 @@ jobs:
 
       - name: Upload exact receipt
         if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63d261d214911a7ce02
         with:
           name: fieldwork-457-b2-official-installer-job
           path: receipt/
