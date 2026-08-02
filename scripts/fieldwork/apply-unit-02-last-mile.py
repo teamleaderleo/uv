@@ -37,6 +37,18 @@ if source_total != 5:
 if test_total != 2:
     raise SystemExit(f"unexpected test replacement total: {test_total}")
 
+# Keep the generated source byte-identical to the rustfmt-validated candidate.
+virtualenv_text = VIRTUALENV.read_text()
+old_activate_arm = '''            (true, "activate") => Cow::Borrowed(
+                r#"'"$(dirname -- "$(dirname -- "$(realpath "$SCRIPT_PATH")")")"'"#,
+            ),'''
+new_activate_arm = '''            (true, "activate") => {
+                Cow::Borrowed(r#"'"$(dirname -- "$(dirname -- "$(realpath "$SCRIPT_PATH")")")"'"#)
+            }'''
+if virtualenv_text.count(old_activate_arm) != 1:
+    raise SystemExit("relocatable activate arm changed")
+VIRTUALENV.write_text(virtualenv_text.replace(old_activate_arm, new_activate_arm, 1))
+
 run_text = RUN.read_text()
 function_marker = """/// Create a copy of the entrypoint at `source` at `target`, if it has a Python shebang, replacing
 /// the previous Python executable with a new one.
