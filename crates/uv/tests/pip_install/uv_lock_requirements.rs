@@ -5,7 +5,18 @@ use uv_test::uv_snapshot;
 #[test]
 fn reject_project_uv_lock_as_requirements() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    context.temp_dir.child("uv.lock").touch()?;
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        "#,
+    )?;
+
+    context.lock().assert().success();
+    assert!(context.temp_dir.child("uv.lock").path().is_file());
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -26,7 +37,14 @@ fn reject_pep723_script_lock_as_requirements() -> Result<()> {
     context.temp_dir.child("action.py").write_str(
         "# /// script\n# dependencies = []\n# ///\n\nprint('hello')\n",
     )?;
-    context.temp_dir.child("action.py.lock").touch()?;
+
+    context
+        .lock()
+        .arg("--script")
+        .arg("action.py")
+        .assert()
+        .success();
+    assert!(context.temp_dir.child("action.py.lock").path().is_file());
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
