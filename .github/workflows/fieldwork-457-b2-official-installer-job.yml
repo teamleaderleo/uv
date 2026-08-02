@@ -134,7 +134,7 @@ jobs:
 
       - name: Upload exact receipt
         if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63d261d214911a7ce02
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: fieldwork-457-b2-official-installer-job
           path: receipt/
