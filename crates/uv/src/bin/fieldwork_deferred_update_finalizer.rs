@@ -1,4 +1,6 @@
+#[cfg(windows)]
 use std::env;
+#[cfg(windows)]
 use std::path::PathBuf;
 use std::process::ExitCode;
 
