@@ -63,35 +63,35 @@ impl std::error::Error for JobError {}
 
 /// A Windows Job Object configured to terminate assigned processes when closed.
 ///
-/// [`Job::new`] preserves the existing wrapper-oriented behavior: child processes may silently
-/// break away so they can create or join their own jobs. [`Job::new_strict_tree`] is an experimental
+/// [`Job::new`] preserves existing wrapper-oriented behavior: child processes may silently
+/// break away so they can create or join their own jobs. [`Job::new_strict_tree`] is experimental
 /// alternative for process trees that must remain supervised through descendants.
 pub struct Job {
     handle: HANDLE,
 }
 
 impl Job {
-    /// Creates the existing wrapper-oriented job object.
+    /// Creates existing wrapper-oriented job object.
     ///
-    /// The job is configured with:
-    /// - `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: terminate assigned processes when the handle closes;
-    /// - `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK`: descendants are not automatically retained in the
-    ///   job, preserving compatibility with children that manage their own job objects.
+    /// Job is configured with:
+    /// - `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: terminate assigned processes when handle closes;
+    /// - `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK`: descendants are not automatically retained in job,
+    ///   preserving compatibility with children that manage their own job objects.
     pub fn new() -> Result<Self, JobError> {
         Self::new_with_silent_breakaway(true)
     }
 
-    /// Creates an experimental strict process-tree job object.
+    /// Creates experimental strict process-tree job object.
     ///
     /// Descendants inherit membership by default because no breakaway limit is enabled. This is a
-    /// stronger cleanup contract, but a descendant that requires its own incompatible job object
-    /// may fail. The Fieldwork self-update experiment compares both policies before any product use.
+    /// stronger cleanup contract, but descendant that requires its own incompatible job object may
+    /// fail. Fieldwork self-update experiment compares both policies before any product use.
     pub fn new_strict_tree() -> Result<Self, JobError> {
         Self::new_with_silent_breakaway(false)
     }
 
     fn new_with_silent_breakaway(silent_breakaway: bool) -> Result<Self, JobError> {
-        // SAFETY: CreateJobObjectW with None parameters creates an unnamed job object.
+        // SAFETY: CreateJobObjectW with None parameters creates unnamed job object.
         let handle =
             unsafe { CreateJobObjectW(None, None) }.map_err(|e| JobError::Create(e.code().0))?;
 
@@ -100,17 +100,31 @@ impl Job {
         Ok(job)
     }
 
-    /// Assigns a standard-library child process to this job object.
+    /// Assigns standard-library child process to this job object.
     #[cfg(feature = "std")]
     pub fn assign_child(&self, child: &std::process::Child) -> Result<(), JobError> {
         use std::os::windows::io::{AsHandle, AsRawHandle};
 
         let handle = child.as_handle();
-        // SAFETY: `handle` borrows a live `Child` process handle for this call.
+        // SAFETY: `handle` borrows live `Child` process handle for this call.
         unsafe { self.assign_process(HANDLE(handle.as_raw_handle())) }
     }
 
-    /// Assigns a process to this job object.
+    /// Assigns raw Windows process handle to this job object.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure raw handle refers to live process for duration of call.
+    #[cfg(feature = "std")]
+    pub unsafe fn assign_raw_process_handle(
+        &self,
+        raw_handle: *mut c_void,
+    ) -> Result<(), JobError> {
+        // SAFETY: Caller establishes raw handle validity for this assignment call.
+        unsafe { self.assign_process(HANDLE(raw_handle)) }
+    }
+
+    /// Assigns process to this job object.
     ///
     /// # Safety
     ///
@@ -128,7 +142,7 @@ impl Job {
         let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         let info_size = u32::try_from(size_of_val(&info)).expect("job info size fits in u32");
 
-        // SAFETY: We pass a valid job handle, correct information class, properly sized buffer,
+        // SAFETY: We pass valid job handle, correct information class, properly sized buffer,
         // and buffer size.
         unsafe {
             QueryInformationJobObject(
