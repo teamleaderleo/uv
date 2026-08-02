@@ -25,7 +25,7 @@ case "${UNIT_02_VARIANT:?}" in
     VIRTUAL_ENV="$(dirname -- "$(dirname -- "$(realpath -- "$SCRIPT_PATH")")")"
     ;;
   candidate)
-    VIRTUAL_ENV="$(dirname "$(dirname "$(realpath "$SCRIPT_PATH")")")"
+    VIRTUAL_ENV="$(dirname -- "$(dirname -- "$(realpath "$SCRIPT_PATH")")")"
     ;;
   *)
     echo "bad variant: $UNIT_02_VARIANT" >&2
