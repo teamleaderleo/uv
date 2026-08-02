@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - research/source-provenance-order-20260802
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fieldwork-source-provenance.yml
+      - fieldwork/source-provenance-probe/**
   workflow_dispatch:
 
 permissions:
