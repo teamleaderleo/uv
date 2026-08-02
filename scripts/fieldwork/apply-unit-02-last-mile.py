@@ -9,34 +9,33 @@ RUN = Path("crates/uv/src/commands/project/run.rs")
 VENV_TEST = Path("crates/uv/tests/python/venv.rs")
 
 SOURCE_EXPECTED = {
-    WHEEL: {"realpath --": 2, "dirname --": 2},
-    VIRTUALENV: {"realpath --": 2, "dirname --": 4},
-    RUN: {"realpath --": 1, "dirname --": 1},
+    WHEEL: 2,
+    VIRTUALENV: 2,
+    RUN: 1,
 }
 TEST_EXPECTED = {
-    VENV_TEST: {"realpath --": 2, "dirname --": 4},
+    VENV_TEST: 2,
 }
 
 
-def replace_delimiters(paths: dict[Path, dict[str, int]]) -> dict[str, int]:
-    totals = {"realpath --": 0, "dirname --": 0}
+def replace_realpath_delimiters(paths: dict[Path, int]) -> int:
+    total = 0
     for path, expected in paths.items():
         text = path.read_text()
-        counts = {needle: text.count(needle) for needle in totals}
-        if counts != expected:
-            raise SystemExit(f"unexpected delimiter counts in {path}: {counts} != {expected}")
-        path.write_text(text.replace("realpath --", "realpath").replace("dirname --", "dirname"))
-        for needle, count in counts.items():
-            totals[needle] += count
-    return totals
+        count = text.count("realpath --")
+        if count != expected:
+            raise SystemExit(f"unexpected realpath delimiter count in {path}: {count} != {expected}")
+        path.write_text(text.replace("realpath --", "realpath"))
+        total += count
+    return total
 
 
-source_totals = replace_delimiters(SOURCE_EXPECTED)
-test_totals = replace_delimiters(TEST_EXPECTED)
-if source_totals != {"realpath --": 5, "dirname --": 7}:
-    raise SystemExit(f"unexpected source replacement totals: {source_totals}")
-if test_totals != {"realpath --": 2, "dirname --": 4}:
-    raise SystemExit(f"unexpected test replacement totals: {test_totals}")
+source_total = replace_realpath_delimiters(SOURCE_EXPECTED)
+test_total = replace_realpath_delimiters(TEST_EXPECTED)
+if source_total != 5:
+    raise SystemExit(f"unexpected source replacement total: {source_total}")
+if test_total != 2:
+    raise SystemExit(f"unexpected test replacement total: {test_total}")
 
 run_text = RUN.read_text()
 function_marker = """/// Create a copy of the entrypoint at `source` at `target`, if it has a Python shebang, replacing
@@ -50,13 +49,13 @@ fn copy_entrypoint(
 """
 constants = r"""#[cfg(unix)]
 const RELOCATABLE_SHEBANG: &str = r#"#!/bin/sh
-'''exec' "$(dirname "$(realpath "$0")")"/'python' "$0" "$@"
+'''exec' "$(dirname -- "$(realpath "$0")")"/'python' "$0" "$@"
 ' '''
 "#;
 
 #[cfg(unix)]
 const RELOCATABLE_PYTHON3_SHEBANG: &str = r#"#!/bin/sh
-'''exec' "$(dirname "$(realpath "$0")")"/'python3' "$0" "$@"
+'''exec' "$(dirname -- "$(realpath "$0")")"/'python3' "$0" "$@"
 ' '''
 "#;
 
@@ -81,7 +80,7 @@ old_recognizer = r"""    let Some(contents) = contents
         // Check for a relative path or relocatable shebang
         .strip_prefix(
             r#"#!/bin/sh
-'''exec' "$(dirname "$(realpath "$0")")"/'python' "$0" "$@"
+'''exec' "$(dirname -- "$(realpath "$0")")"/'python' "$0" "$@"
 ' '''
 "#,
         )
@@ -159,11 +158,23 @@ mod tests {
 run_text += tests
 RUN.write_text(run_text)
 
-if RUN.read_text().count("realpath --") != 2 or RUN.read_text().count("dirname --") != 2:
-    raise SystemExit("legacy delimiter forms must remain exactly twice in run.rs")
-if VENV_TEST.read_text().count("realpath --") or VENV_TEST.read_text().count("dirname --"):
-    raise SystemExit("relocatable venv expectations still contain unsupported delimiters")
+expected_dirname_counts = {
+    WHEEL: 2,
+    VIRTUALENV: 4,
+    RUN: 4,
+    VENV_TEST: 4,
+}
+for path, expected in expected_dirname_counts.items():
+    count = path.read_text().count("dirname --")
+    if count != expected:
+        raise SystemExit(f"dirname delimiter count changed in {path}: {count} != {expected}")
 
-print("UNIT_02_SOURCE_REPLACED=realpath:5,dirname:7")
-print("UNIT_02_TEST_EXPECTATIONS=realpath:2,dirname:4")
-print("UNIT_02_LEGACY_RECOGNIZER=realpath:2,dirname:2")
+if RUN.read_text().count("realpath --") != 2:
+    raise SystemExit("legacy realpath delimiter forms must remain exactly twice in run.rs")
+if VENV_TEST.read_text().count("realpath --"):
+    raise SystemExit("relocatable venv expectations still contain unsupported realpath delimiters")
+
+print("UNIT_02_SOURCE_REALPATH_REPLACED=5")
+print("UNIT_02_TEST_REALPATH_EXPECTATIONS=2")
+print("UNIT_02_LEGACY_REALPATH_RECOGNIZER=2")
+print("UNIT_02_DIRNAME_DELIMITERS=wheel:2,virtualenv:4,run:4,venv-test:4")
