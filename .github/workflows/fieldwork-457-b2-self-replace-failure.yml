@@ -74,9 +74,16 @@ jobs:
           Copy-Item -LiteralPath $built -Destination $victim
           if (Test-Path -LiteralPath $missing) { Remove-Item -Force $missing }
 
-          $process = Start-Process -FilePath $victim -ArgumentList @($missing) -Wait -PassThru -NoNewWindow \
-            -RedirectStandardOutput (Join-Path $env:GITHUB_WORKSPACE 'receipt/helper-stdout.txt') \
-            -RedirectStandardError (Join-Path $env:GITHUB_WORKSPACE 'receipt/helper-stderr.txt')
+          $startArgs = @{
+            FilePath = $victim
+            ArgumentList = @($missing)
+            Wait = $true
+            PassThru = $true
+            NoNewWindow = $true
+            RedirectStandardOutput = (Join-Path $env:GITHUB_WORKSPACE 'receipt/helper-stdout.txt')
+            RedirectStandardError = (Join-Path $env:GITHUB_WORKSPACE 'receipt/helper-stderr.txt')
+          }
+          $process = Start-Process @startArgs
           "exit_code=$($process.ExitCode)" | Set-Content receipt/helper-exit.txt
           if ($process.ExitCode -ne 42) {
             throw "Expected helper to return the controlled self_replace error, got $($process.ExitCode)"
