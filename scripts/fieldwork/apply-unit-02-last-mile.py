@@ -115,7 +115,6 @@ if "copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs" in run_text
     raise SystemExit("copy_entrypoint compatibility test already exists")
 
 tests = r'''
-
 #[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
