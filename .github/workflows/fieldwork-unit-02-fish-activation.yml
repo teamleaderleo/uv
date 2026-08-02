@@ -1,0 +1,97 @@
+name: Fieldwork unit 02 fish activation validation
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/02-last-mile-validation
+    paths:
+      - .github/workflows/fieldwork-unit-02-fish-activation.yml
+      - scripts/fieldwork/unit-02-fish-activation-probe.sh
+
+permissions:
+  contents: read
+
+jobs:
+  fish-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact carrier head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify execution-only fence
+        env:
+          EXPECTED_BASE: c8a5c36d60a5cc35f496f583146967e210f87810
+        run: |
+          set -euo pipefail
+          test "$(git merge-base "$EXPECTED_BASE" HEAD)" = "$EXPECTED_BASE"
+          git diff --name-only "$EXPECTED_BASE"...HEAD | sort > "$RUNNER_TEMP/changed-files.txt"
+          cat > "$RUNNER_TEMP/expected-files.txt" <<'EOF'
+          .github/workflows/fieldwork-unit-02-fish-activation.yml
+          scripts/fieldwork/unit-02-fish-activation-probe.sh
+          EOF
+          diff -u "$RUNNER_TEMP/expected-files.txt" "$RUNNER_TEMP/changed-files.txt"
+          /bin/sh -n scripts/fieldwork/unit-02-fish-activation-probe.sh
+          test -z "$(git status --porcelain)"
+
+      - name: Install Fish on GNU runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fish
+
+      - name: Run GNU Fish activation matrix
+        run: |
+          /bin/sh scripts/fieldwork/unit-02-fish-activation-probe.sh gnu | tee "$RUNNER_TEMP/fish-gnu.txt"
+          grep -F 'UNIT_02_FISH_ACTIVATION=gnu' "$RUNNER_TEMP/fish-gnu.txt"
+
+      - name: Run Alpine BusyBox Fish activation matrix
+        run: |
+          docker run --rm --volume "$PWD:/source:ro" alpine:3.22 /bin/sh -c \
+            'apk add --no-cache fish >/dev/null && exec /bin/sh /source/scripts/fieldwork/unit-02-fish-activation-probe.sh busybox' \
+            | tee "$RUNNER_TEMP/fish-busybox.txt"
+          grep -F 'UNIT_02_FISH_ACTIVATION=busybox' "$RUNNER_TEMP/fish-busybox.txt"
+
+      - name: Retain Linux Fish receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unit-02-fish-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/changed-files.txt
+            ${{ runner.temp }}/fish-gnu.txt
+            ${{ runner.temp }}/fish-busybox.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  fish-macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact carrier head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Fish
+        run: command -v fish >/dev/null || brew install fish
+
+      - name: Run macOS Fish activation matrix
+        run: |
+          /bin/sh -n scripts/fieldwork/unit-02-fish-activation-probe.sh
+          /bin/sh scripts/fieldwork/unit-02-fish-activation-probe.sh macos | tee "$RUNNER_TEMP/fish-macos.txt"
+          grep -F 'UNIT_02_FISH_ACTIVATION=macos' "$RUNNER_TEMP/fish-macos.txt"
+
+      - name: Retain macOS Fish receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unit-02-fish-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fish-macos.txt
+          if-no-files-found: warn
+          retention-days: 14
