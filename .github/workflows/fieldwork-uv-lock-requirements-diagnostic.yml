@@ -1,0 +1,74 @@
+name: Fieldwork uv lock requirements diagnostic
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/uv-lock-requirements-diagnostic
+    paths:
+      - .github/workflows/fieldwork-uv-lock-requirements-diagnostic.yml
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+  SOURCE_BASE: 1da26a68629be6ae5fd7f924a7d49ff54763a7df
+  SOURCE_SHA: 571cd57dfbc626a1a2b51572ff978206fbd6f797
+
+jobs:
+  focused-source-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify source identity and fence
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --name-only "$SOURCE_BASE"..."$SOURCE_SHA" | sort > "$RUNNER_TEMP/changed-files.txt"
+          cat > "$RUNNER_TEMP/expected-files.txt" <<'EOF'
+          crates/uv-requirements/src/sources.rs
+          crates/uv/tests/pip_install/main.rs
+          crates/uv/tests/pip_install/uv_lock_requirements.rs
+          EOF
+          diff -u "$RUNNER_TEMP/expected-files.txt" "$RUNNER_TEMP/changed-files.txt"
+          git diff --check "$SOURCE_BASE"..."$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
+
+      - name: Install test Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.33"
+
+      - name: Provision Python 3.12
+        run: uv python install 3.12
+
+      - name: Check formatting and compile affected crates
+        run: |
+          set -euo pipefail
+          rustup component add rustfmt
+          cargo fmt --all --check
+          cargo check -p uv-requirements -p uv
+
+      - name: Run focused producer-backed regression tests
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test -p uv --test pip_install uv_lock_requirements -- --nocapture
+
+      - name: Verify clean source tree
+        if: always()
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain)"
