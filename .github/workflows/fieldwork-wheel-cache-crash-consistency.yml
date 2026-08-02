@@ -17,7 +17,7 @@ concurrency:
 jobs:
   linux-target:
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 90
     steps:
       - name: Check out exact owned head
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -32,6 +32,8 @@ jobs:
             fieldwork/wheel-cache-crash-consistency/crash_model.py \
             fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
             fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py
+          git apply --check \
+            fieldwork/wheel-cache-crash-consistency/missing-local-archive-candidate.patch
 
       - name: Execute bounded crash-state model
         run: |
@@ -50,7 +52,7 @@ jobs:
           )
           PY
 
-      - name: Build exact uv CLI
+      - name: Build exact baseline uv CLI
         run: cargo build --locked --bin uv
 
       - name: Execute isolated extracted-wheel corruption probe
@@ -63,15 +65,56 @@ jobs:
           set -e
           test "$status" -eq 0
 
-      - name: Execute missing local archive probe
+      - name: Execute missing local archive baseline
         run: |
           set +e
           python3 fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
             --uv target/debug/uv \
-            | tee fieldwork-wheel-cache-missing-local-archive.json
+            | tee fieldwork-wheel-cache-missing-local-archive-baseline.json
           status=${PIPESTATUS[0]}
           set -e
           test "$status" -eq 0
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(
+              Path('fieldwork-wheel-cache-missing-local-archive-baseline.json').read_text()
+          )
+          assert receipt['outcome'] == 'bug-reproduced', receipt
+          assert receipt['source_wheel_unchanged'] is True, receipt
+          assert receipt['stale_pointer_survived'] is True, receipt
+          PY
+
+      - name: Apply bounded local archive candidate
+        run: |
+          git apply \
+            fieldwork/wheel-cache-crash-consistency/missing-local-archive-candidate.patch
+          git diff --check
+          cargo fmt --all -- --check
+
+      - name: Build candidate uv CLI
+        run: cargo build --locked --bin uv
+
+      - name: Execute missing local archive candidate
+        run: |
+          set +e
+          python3 fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
+            --uv target/debug/uv \
+            | tee fieldwork-wheel-cache-missing-local-archive-candidate.json
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -eq 0
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(
+              Path('fieldwork-wheel-cache-missing-local-archive-candidate.json').read_text()
+          )
+          assert receipt['outcome'] == 'recovered', receipt
+          assert receipt['source_wheel_unchanged'] is True, receipt
+          PY
 
       - name: Upload exact receipts
         if: always()
@@ -81,6 +124,7 @@ jobs:
           path: |
             fieldwork-wheel-cache-crash-model.json
             fieldwork-wheel-cache-corruption.json
-            fieldwork-wheel-cache-missing-local-archive.json
+            fieldwork-wheel-cache-missing-local-archive-baseline.json
+            fieldwork-wheel-cache-missing-local-archive-candidate.json
           if-no-files-found: warn
           retention-days: 30
