@@ -70,15 +70,21 @@ jobs:
           diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/changed-files.txt"
           python - <<'PY'
           from pathlib import Path
+          wheel = Path('crates/uv-install-wheel/src/wheel.rs').read_text()
+          virtualenv = Path('crates/uv-virtualenv/src/virtualenv.rs').read_text()
           run = Path('crates/uv/src/commands/project/run.rs').read_text()
           venv_test = Path('crates/uv/tests/python/venv.rs').read_text()
+          assert 'realpath --' not in wheel
+          assert 'realpath --' not in virtualenv
           assert run.count('realpath --') == 2
-          assert run.count('dirname --') == 2
+          assert 'realpath --' not in venv_test
+          assert wheel.count('dirname --') == 2
+          assert virtualenv.count('dirname --') == 4
+          assert run.count('dirname --') == 4
+          assert venv_test.count('dirname --') == 4
           assert 'RELOCATABLE_PYTHON3_SHEBANG' in run
           assert 'LEGACY_RELOCATABLE_PYTHON3_SHEBANG' in run
           assert 'copy_entrypoint_accepts_current_and_legacy_relocatable_shebangs' in run
-          assert 'realpath --' not in venv_test
-          assert 'dirname --' not in venv_test
           PY
           git diff -- crates/uv-install-wheel/src/wheel.rs crates/uv-virtualenv/src/virtualenv.rs crates/uv/src/commands/project/run.rs crates/uv/tests/python/venv.rs > "${{ runner.temp }}/candidate.patch"
           test -s "${{ runner.temp }}/candidate.patch"
@@ -124,9 +130,10 @@ jobs:
           grep -F 'UNIT_02_MATRIX=busybox' "$RESULT"
           grep -F 'UNIT_02_ACTIVATION=gnu' "${{ runner.temp }}/activation-gnu.txt"
           grep -F 'UNIT_02_ACTIVATION=busybox' "${{ runner.temp }}/activation-busybox.txt"
-          grep -F 'UNIT_02_SOURCE_REPLACED=realpath:5,dirname:7' "${{ runner.temp }}/candidate-counts.txt"
-          grep -F 'UNIT_02_TEST_EXPECTATIONS=realpath:2,dirname:4' "${{ runner.temp }}/candidate-counts.txt"
-          grep -F 'UNIT_02_LEGACY_RECOGNIZER=realpath:2,dirname:2' "${{ runner.temp }}/candidate-counts.txt"
+          grep -F 'UNIT_02_SOURCE_REALPATH_REPLACED=5' "${{ runner.temp }}/candidate-counts.txt"
+          grep -F 'UNIT_02_TEST_REALPATH_EXPECTATIONS=2' "${{ runner.temp }}/candidate-counts.txt"
+          grep -F 'UNIT_02_LEGACY_REALPATH_RECOGNIZER=2' "${{ runner.temp }}/candidate-counts.txt"
+          grep -F 'UNIT_02_DIRNAME_DELIMITERS=wheel:2,virtualenv:4,run:4,venv-test:4' "${{ runner.temp }}/candidate-counts.txt"
           grep -F 'UNIT_02_DIRECT_SHEBANG_ARGV0=script-path' "${{ runner.temp }}/argv0-linux.txt"
 
       - name: Retain Linux receipts
@@ -219,7 +226,7 @@ jobs:
           git read-tree "$SOURCE_BASE"
           git add -- crates/uv-install-wheel/src/wheel.rs crates/uv-virtualenv/src/virtualenv.rs crates/uv/src/commands/project/run.rs crates/uv/tests/python/venv.rs
           tree=$(git write-tree)
-          commit=$(printf '%s\n\n%s\n' 'fix: make relocatable launchers compatible with BusyBox realpath' 'Remove unsupported delimiters, update relocatable venv expectations, and keep recognizing historical python and python3 shebangs.' | git commit-tree "$tree" -p "$SOURCE_BASE")
+          commit=$(printf '%s\n\n%s\n' 'fix: make relocatable launchers compatible with BusyBox realpath' 'Remove unsupported realpath delimiters, update relocatable venv expectations, and keep recognizing historical python and python3 shebangs.' | git commit-tree "$tree" -p "$SOURCE_BASE")
           printf 'source_tree=%s\nsource_commit=%s\n' "$tree" "$commit" | tee "${{ runner.temp }}/source-receipt.txt"
           git diff-tree --no-commit-id --name-only -r "$commit" | sort > "${{ runner.temp }}/commit-files.txt"
           diff -u "${{ runner.temp }}/expected-files.txt" "${{ runner.temp }}/commit-files.txt"
