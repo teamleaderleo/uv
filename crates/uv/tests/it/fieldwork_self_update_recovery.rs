@@ -83,12 +83,15 @@ async fn fieldwork_custom_ghe_interruption_displaces_canonical_executable() -> R
         .mount(&server)
         .await;
 
+    // Do not let the deliberately orphanable installer inherit the test runner's
+    // output handles. Otherwise the product assertion can pass while the workflow
+    // remains alive waiting for a descendant to close those handles.
     let mut child = Command::new(installed_uv.path())
         .args(["self", "update", target_version])
         .env("AXOUPDATER_CONFIG_PATH", receipt_dir.path())
         .env(EnvVars::UV_INSTALLER_GHE_BASE_URL, server.uri())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .context("launch copied uv through custom updater route")?;
 
@@ -118,8 +121,10 @@ async fn fieldwork_custom_ghe_interruption_displaces_canonical_executable() -> R
     );
 
     child.kill().context("interrupt copied uv process")?;
-    let _ = child.wait();
+    // Release the deliberately blocked installer immediately so no descendant is
+    // left behind after the uv parent has been interrupted.
     finish_path.write_str("finish")?;
+    let _ = child.wait();
 
     tokio::time::sleep(Duration::from_millis(250)).await;
     assert!(
