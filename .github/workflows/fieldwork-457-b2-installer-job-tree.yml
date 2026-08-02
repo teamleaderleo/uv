@@ -1,0 +1,107 @@
+name: Fieldwork 457 B2 installer process-tree ownership
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/fieldwork-457-b2-installer-job-tree.yml
+      - crates/uv-windows/src/job.rs
+      - crates/uv/src/bin/fieldwork_job_tree.rs
+
+permissions:
+  contents: read
+
+jobs:
+  job-tree:
+    name: Windows strict versus silent-breakaway Job Object
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CANDIDATE_HEAD: 77e107dd2665f660c461998bc83174bf26ee7cf6
+      CI: 1
+    steps:
+      - name: Check out exact experiment
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact base and file fence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git merge-base HEAD $env:CANDIDATE_HEAD) -ne $env:CANDIDATE_HEAD) {
+            throw 'Job-tree experiment does not descend from exact candidate head'
+          }
+          $expected = @(
+            '.github/workflows/fieldwork-457-b2-installer-job-tree.yml'
+            'crates/uv-windows/src/job.rs'
+            'crates/uv/src/bin/fieldwork_job_tree.rs'
+          ) | Sort-Object
+          $changed = @(git diff --name-only "$env:CANDIDATE_HEAD..HEAD") | Sort-Object
+          if (Compare-Object $expected $changed) {
+            throw "Unexpected experiment diff. Expected: $($expected -join ', '); actual: $($changed -join ', ')"
+          }
+          git diff --check "$env:CANDIDATE_HEAD..HEAD"
+          New-Item -ItemType Directory -Force -Path receipt | Out-Null
+          @(
+            "experiment_head=$(git rev-parse HEAD)"
+            "candidate_head=$env:CANDIDATE_HEAD"
+            "runner=$env:RUNNER_OS"
+          ) | Set-Content receipt/identity.txt
+          rustc --version | Tee-Object -FilePath receipt/rust-version.txt
+          cargo --version | Tee-Object -FilePath receipt/cargo-version.txt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          shared-key: fieldwork-457-b2-installer-job-tree
+          cache-on-failure: true
+
+      - name: Format and build probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo fmt --all --check 2>&1 | Tee-Object -FilePath receipt/fmt.log
+          cargo build -p uv --bin fieldwork_job_tree --features self-update 2>&1 |
+            Tee-Object -FilePath receipt/build.log
+
+      - name: Compare breakaway policies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $helper = Join-Path $env:GITHUB_WORKSPACE 'target/debug/fieldwork_job_tree.exe'
+          $root = Join-Path $env:RUNNER_TEMP 'installer-job-tree'
+          $silent = Join-Path $root 'silent'
+          $strict = Join-Path $root 'strict'
+
+          & $helper silent $silent 2>&1 | Tee-Object -FilePath receipt/silent.log
+          if ($LASTEXITCODE -ne 0) { throw "silent-breakaway probe failed with $LASTEXITCODE" }
+          Copy-Item -LiteralPath (Join-Path $silent 'result.txt') -Destination receipt/silent-result.txt
+
+          & $helper strict $strict 2>&1 | Tee-Object -FilePath receipt/strict.log
+          if ($LASTEXITCODE -ne 0) { throw "strict-tree probe failed with $LASTEXITCODE" }
+          Copy-Item -LiteralPath (Join-Path $strict 'result.txt') -Destination receipt/strict-result.txt
+
+          $silentResult = Get-Content -Raw receipt/silent-result.txt
+          $strictResult = Get-Content -Raw receipt/strict-result.txt
+          if ($silentResult -notmatch 'descendant_survived=true') {
+            throw 'existing silent-breakaway policy did not exhibit descendant escape'
+          }
+          if ($strictResult -notmatch 'descendant_survived=false') {
+            throw 'strict policy did not retain descendant supervision'
+          }
+
+          @{
+            existingPolicy = 'kill assigned parent; descendants silently break away'
+            strictPolicy = 'kill assigned parent and inherited descendants'
+            compatibilityQuestion = 'strict jobs can reject descendants that require their own incompatible job object'
+          } | ConvertTo-Json | Set-Content receipt/result.json
+
+      - name: Upload exact receipt
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: fieldwork-457-b2-installer-job-tree
+          path: receipt/
+          if-no-files-found: error
+          retention-days: 30
