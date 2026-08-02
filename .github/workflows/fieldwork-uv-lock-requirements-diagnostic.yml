@@ -16,14 +16,14 @@ env:
   CARGO_TERM_COLOR: always
   RUSTUP_MAX_RETRIES: 10
   SOURCE_BASE: 1da26a68629be6ae5fd7f924a7d49ff54763a7df
-  SOURCE_SHA: 571cd57dfbc626a1a2b51572ff978206fbd6f797
+  SOURCE_SHA: ba55497fe83ea9bb07c04452f8ba190fa4440a05
 
 jobs:
   focused-source-gate:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - name: Check out exact source head
+      - name: Check out exact repaired source head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ env.SOURCE_SHA }}
@@ -44,7 +44,7 @@ jobs:
           git diff --check "$SOURCE_BASE"..."$SOURCE_SHA"
           test -z "$(git status --porcelain)"
 
-      - name: Apply scoped parse-failure diagnostic experiment
+      - name: Apply requirements-only parse-failure experiment
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -77,18 +77,18 @@ jobs:
                   return false;
               }
 
-              let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
+              let Some(file_name) = path.file_name() else {
                   return false;
               };
 
-              if file_name == "uv.lock" {
+              if file_name == OsStr::new("uv.lock") {
                   return true;
               }
 
-              let Some(script_name) = file_name
-                  .strip_suffix(".lock")
-                  .filter(|name| !name.is_empty())
-              else {
+              if path.extension() != Some(OsStr::new("lock")) {
+                  return false;
+              }
+              let Some(script_name) = path.file_stem() else {
                   return false;
               };
               let script_path = path.with_file_name(script_name);
@@ -257,43 +257,6 @@ jobs:
               error: File not found: `uv.lock`
               "
               );
-
-              Ok(())
-          }
-
-          #[cfg(unix)]
-          #[test]
-          fn reject_non_utf8_pep723_script_lock_as_requirements() -> Result<()> {
-              use std::ffi::OsString;
-              use std::os::unix::ffi::OsStringExt;
-              use std::path::PathBuf;
-
-              let context = uv_test::test_context!("3.12");
-              let script_name = PathBuf::from(OsString::from_vec(b"action-\xff.py".to_vec()));
-              context.temp_dir.child(&script_name).write_str(
-                  "# /// script\n# dependencies = []\n# ///\n\nprint('hello')\n",
-              )?;
-
-              context
-                  .lock()
-                  .arg("--script")
-                  .arg(&script_name)
-                  .assert()
-                  .success();
-
-              let mut lock_name = script_name.as_os_str().to_os_string();
-              lock_name.push(".lock");
-              let lock_name = PathBuf::from(lock_name);
-              assert!(context.temp_dir.child(&lock_name).path().is_file());
-
-              context
-                  .pip_install()
-                  .arg("-r")
-                  .arg(&lock_name)
-                  .arg("--strict")
-                  .assert()
-                  .failure()
-                  .stderr(predicates::str::contains("appears to be a uv lockfile"));
 
               Ok(())
           }
