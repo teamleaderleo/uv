@@ -2,8 +2,8 @@
 //!
 //! Job Objects allow grouping processes together and applying limits. The key feature
 //! used here is `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, which ensures that when the job
-//! handle is closed (e.g., when the parent process exits), all processes in the job
-//! are terminated.
+//! handle is closed (e.g., when the parent process exits), all processes in the job are
+//! terminated.
 //!
 //! This is essential for wrapper processes (like `uvx.exe` or the Python trampoline)
 //! to ensure child processes don't become orphaned when the wrapper is killed.
@@ -20,7 +20,7 @@ use windows::Win32::System::JobObjects::{
 /// Error type for job object operations.
 #[derive(Debug, Clone, Copy)]
 pub enum JobError {
-    /// Failed to create the job object.
+    /// Failed to create job object.
     Create(i32),
     /// Failed to query job object information.
     Query(i32),
@@ -31,7 +31,7 @@ pub enum JobError {
 }
 
 impl JobError {
-    /// Returns the Windows error code associated with this error.
+    /// Returns Windows error code associated with this error.
     #[must_use]
     pub const fn code(&self) -> i32 {
         match *self {
@@ -39,7 +39,7 @@ impl JobError {
         }
     }
 
-    /// Returns a static description of the error kind.
+    /// Returns static description of error kind.
     #[must_use]
     pub const fn message(&self) -> &'static str {
         match self {
@@ -61,57 +61,65 @@ impl std::fmt::Display for JobError {
 #[cfg(feature = "std")]
 impl std::error::Error for JobError {}
 
-/// A Windows Job Object configured to terminate child processes when closed.
+/// A Windows Job Object configured to terminate assigned processes when closed.
 ///
-/// When a `Job` is dropped, the job handle is closed. If `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
-/// is set (which [`Job::new`] does by default), all processes assigned to the job will be
-/// terminated.
+/// [`Job::new`] preserves the existing wrapper-oriented behavior: child processes may silently
+/// break away so they can create or join their own jobs. [`Job::new_strict_tree`] is an experimental
+/// alternative for process trees that must remain supervised through descendants.
 pub struct Job {
     handle: HANDLE,
 }
 
 impl Job {
-    /// Creates a new Job Object configured for child process lifecycle management.
+    /// Creates the existing wrapper-oriented job object.
     ///
     /// The job is configured with:
-    /// - `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: Terminate all processes when job handle closes
-    /// - `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK`: Allow child processes to break away if needed
-    #[allow(unsafe_code)]
+    /// - `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: terminate assigned processes when the handle closes;
+    /// - `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK`: descendants are not automatically retained in the
+    ///   job, preserving compatibility with children that manage their own job objects.
     pub fn new() -> Result<Self, JobError> {
+        Self::new_with_silent_breakaway(true)
+    }
+
+    /// Creates an experimental strict process-tree job object.
+    ///
+    /// Descendants inherit membership by default because no breakaway limit is enabled. This is a
+    /// stronger cleanup contract, but a descendant that requires its own incompatible job object
+    /// may fail. The Fieldwork self-update experiment compares both policies before any product use.
+    pub fn new_strict_tree() -> Result<Self, JobError> {
+        Self::new_with_silent_breakaway(false)
+    }
+
+    fn new_with_silent_breakaway(silent_breakaway: bool) -> Result<Self, JobError> {
         // SAFETY: CreateJobObjectW with None parameters creates an unnamed job object.
-        // This is a standard Windows API call with no special requirements.
         let handle =
             unsafe { CreateJobObjectW(None, None) }.map_err(|e| JobError::Create(e.code().0))?;
 
         let job = Self { handle };
-        job.configure_limits()?;
+        job.configure_limits(silent_breakaway)?;
         Ok(job)
     }
 
     /// Assigns a process to this job object.
     ///
-    /// Once assigned, the process will be terminated when the job handle is closed
-    /// (assuming `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` is set).
-    ///
     /// # Safety
     ///
-    /// The caller must ensure `process_handle` is a valid process handle.
+    /// Caller must ensure `process_handle` is valid process handle.
     #[allow(unsafe_code)]
     pub unsafe fn assign_process(&self, process_handle: HANDLE) -> Result<(), JobError> {
-        // SAFETY: Caller guarantees process_handle is valid. self.handle is valid
-        // because we only create it via new() and don't expose mutation.
+        // SAFETY: Caller guarantees process_handle is valid. self.handle is valid because it was
+        // created by CreateJobObjectW and is owned until Drop.
         unsafe { AssignProcessToJobObject(self.handle, process_handle) }
             .map_err(|e| JobError::Assign(e.code().0))
     }
 
-    /// Configures the job object limits.
     #[allow(unsafe_code)]
-    fn configure_limits(&self) -> Result<(), JobError> {
+    fn configure_limits(&self, silent_breakaway: bool) -> Result<(), JobError> {
         let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         let info_size = u32::try_from(size_of_val(&info)).expect("job info size fits in u32");
 
-        // SAFETY: We pass a valid job handle, the correct information class,
-        // a properly sized buffer, and the buffer size.
+        // SAFETY: We pass a valid job handle, correct information class, properly sized buffer,
+        // and buffer size.
         unsafe {
             QueryInformationJobObject(
                 Some(self.handle),
@@ -123,12 +131,13 @@ impl Job {
         }
         .map_err(|e| JobError::Query(e.code().0))?;
 
-        // Set the limits we need
         info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+        if silent_breakaway {
+            info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+        }
 
-        // SAFETY: We pass a valid job handle, the correct information class,
-        // a properly initialized info struct, and its size.
+        // SAFETY: We pass valid job handle, correct information class, properly initialized info
+        // struct, and its size.
         unsafe {
             SetInformationJobObject(
                 self.handle,
@@ -144,8 +153,7 @@ impl Job {
 impl Drop for Job {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
-        // SAFETY: self.handle is valid and we're done using it.
-        // Ignoring the result is fine - there's nothing we can do if close fails.
+        // SAFETY: self.handle is valid and owned by this object.
         let _ = unsafe { CloseHandle(self.handle) };
     }
 }
