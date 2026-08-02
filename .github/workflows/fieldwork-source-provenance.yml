@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - main
+      - research/upstream-79bb-base
     paths:
       - .github/workflows/fieldwork-source-provenance.yml
       - fieldwork/source-provenance-probe/**
