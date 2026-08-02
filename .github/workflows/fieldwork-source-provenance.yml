@@ -1,0 +1,49 @@
+name: Fieldwork UV source provenance
+
+on:
+  push:
+    branches:
+      - research/source-provenance-order-20260802
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-provenance:
+    name: uv ${{ matrix.uv-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        uv-version:
+          - 0.10.0
+          - 0.10.10
+          - 0.12.1
+
+    steps:
+      - name: Check out exact probe branch
+        uses: actions/checkout@v5
+
+      - name: Install uv ${{ matrix.uv-version }}
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ matrix.uv-version }}
+          enable-cache: false
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Run source-provenance matrix
+        env:
+          UV_VERSION: ${{ matrix.uv-version }}
+        run: bash fieldwork/source-provenance-probe/run.sh
+
+      - name: Upload exact probe receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-source-provenance-${{ matrix.uv-version }}
+          path: fieldwork/source-provenance-probe/out/
+          if-no-files-found: error
