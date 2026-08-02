@@ -352,15 +352,18 @@ fn is_uv_lockfile(path: &Path) -> bool {
         return false;
     }
 
-    let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
+    let Some(file_name) = path.file_name() else {
         return false;
     };
 
-    if file_name == "uv.lock" {
+    if file_name == OsStr::new("uv.lock") {
         return true;
     }
 
-    let Some(script_name) = file_name.strip_suffix(".lock").filter(|name| !name.is_empty()) else {
+    if path.extension() != Some(OsStr::new("lock")) {
+        return false;
+    }
+    let Some(script_name) = path.file_stem() else {
         return false;
     };
     let script_path = path.with_file_name(script_name);
