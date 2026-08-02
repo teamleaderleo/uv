@@ -30,7 +30,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           python3 -m py_compile \
             fieldwork/wheel-cache-crash-consistency/crash_model.py \
-            fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py
+            fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
+            fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py
 
       - name: Execute bounded crash-state model
         run: |
@@ -62,6 +63,16 @@ jobs:
           set -e
           test "$status" -eq 0
 
+      - name: Execute missing local archive probe
+        run: |
+          set +e
+          python3 fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
+            --uv target/debug/uv \
+            | tee fieldwork-wheel-cache-missing-local-archive.json
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -eq 0
+
       - name: Upload exact receipts
         if: always()
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
@@ -70,5 +81,6 @@ jobs:
           path: |
             fieldwork-wheel-cache-crash-model.json
             fieldwork-wheel-cache-corruption.json
+            fieldwork-wheel-cache-missing-local-archive.json
           if-no-files-found: warn
           retention-days: 30
