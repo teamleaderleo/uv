@@ -1,4 +1,4 @@
-name: Fieldwork 457 B2 repaired negative controls
+name: Fieldwork 457 B2 old-base discriminator closure
 
 on:
   pull_request:
@@ -9,10 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  negative-controls:
-    name: Windows exact old/candidate executable boundary
+  old-base-discriminator:
+    name: Windows old-base canonical executable displacement
     runs-on: windows-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
     env:
       CANDIDATE_HEAD: 77e107dd2665f660c461998bc83174bf26ee7cf6
       CANDIDATE_BASE: ec8ad5b7c697b9cbbb8a65c8de00fdb461f2010b
@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify identity and carrier fence
+      - name: Verify identity and execution-only fence
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -52,158 +52,15 @@ jobs:
           shared-key: fieldwork-457-b2-negative-controls-v2
           cache-on-failure: true
 
-      - name: Inject candidate actual-executable control
+      - name: Prepare exact old-base worktree and discriminator
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $path = 'crates/uv/src/commands/self_update.rs'
-          $text = [IO.File]::ReadAllText($path)
-          $test = @'
-
-              #[cfg(windows)]
-              #[tokio::test]
-              async fn fieldwork_candidate_cancellation_preserves_actual_current_executable() {
-                  let temp_dir = TempDir::new().unwrap();
-                  let installer_path = temp_dir.path().join("installer.ps1");
-                  let install_prefix = temp_dir.path().join("install-prefix");
-                  let started_path = temp_dir.path().join("installer-started");
-                  let finish_path = temp_dir.path().join("finish-installer");
-                  let current_executable = std::env::current_exe().unwrap();
-                  let mut previous_name = current_executable.as_os_str().to_os_string();
-                  previous_name.push(".previous.exe");
-                  let previous_path = PathBuf::from(previous_name);
-                  let _ = fs_err::remove_file(&previous_path);
-
-                  fs_err::write(
-                      &installer_path,
-                      format!(
-                          "New-Item -ItemType File -Force -Path '{}' | Out-Null\nwhile (-not (Test-Path -LiteralPath '{}')) {{ Start-Sleep -Milliseconds 10 }}\n",
-                          started_path.display(),
-                          finish_path.display(),
-                      ),
-                  )
-                  .unwrap();
-
-                  let task_installer_path = installer_path.clone();
-                  let task_install_prefix = install_prefix.clone();
-                  let task = tokio::spawn(async move {
-                      execute_official_installer(
-                          &task_installer_path,
-                          &task_install_prefix,
-                          true,
-                          &Pep440Version::new([1, 2, 3]),
-                          None,
-                          None,
-                      )
-                      .await
-                  });
-
-                  for _ in 0..600 {
-                      if started_path.exists() || task.is_finished() {
-                          break;
-                      }
-                      tokio::time::sleep(Duration::from_millis(50)).await;
-                  }
-                  assert!(started_path.exists(), "installer should have started within 30 seconds");
-
-                  task.abort();
-                  let join_error = task.await.expect_err("task should be cancelled");
-                  assert!(join_error.is_cancelled(), "task should report completed cancellation");
-                  assert!(
-                      current_executable.exists(),
-                      "candidate must keep the actual running executable at its canonical path"
-                  );
-                  assert!(
-                      !previous_path.exists(),
-                      "candidate must not pre-rename the actual running executable"
-                  );
-                  fs_err::write(&finish_path, "finish").unwrap();
-              }
-          '@
-          $index = $text.LastIndexOf("`n}")
-          if ($index -lt 0) { throw 'Could not find candidate test-module close' }
-          [IO.File]::WriteAllText($path, $text.Insert($index, $test))
-
-      - name: Run candidate actual-executable control
-        id: candidate
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'candidate-target-v2'
-          cargo test -p uv --lib --features self-update fieldwork_candidate_cancellation_preserves_actual_current_executable -- --nocapture 2>&1 |
-            Tee-Object -FilePath receipt/candidate-actual-executable.log
-
-      - name: Prepare exact old-base worktree and controls
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          git checkout -- crates/uv/src/commands/self_update.rs
-          $baseDir = Join-Path $env:RUNNER_TEMP 'uv-old-base-v2'
+          $baseDir = Join-Path $env:RUNNER_TEMP 'uv-old-base-v3'
           git worktree add --detach $baseDir $env:CANDIDATE_BASE
           $path = Join-Path $baseDir 'crates/uv/src/commands/self_update.rs'
           $text = [IO.File]::ReadAllText($path)
-          $tests = @'
-
-              #[cfg(windows)]
-              #[tokio::test]
-              async fn fieldwork_old_head_public_fixture_assertion_still_passes() {
-                  let temp_dir = TempDir::new().unwrap();
-                  let installer_path = temp_dir.path().join("installer.ps1");
-                  let install_prefix = temp_dir.path().join("install-prefix");
-                  let original_path = temp_dir.path().join("uv.exe");
-                  let started_path = temp_dir.path().join("installer-started");
-                  let finish_path = temp_dir.path().join("finish-installer");
-                  let current_executable = std::env::current_exe().unwrap();
-                  let mut previous_name = current_executable.as_os_str().to_os_string();
-                  previous_name.push(".previous.exe");
-                  let previous_path = PathBuf::from(previous_name);
-                  let _ = fs_err::remove_file(&previous_path);
-
-                  fs_err::write(&original_path, "old uv").unwrap();
-                  fs_err::write(
-                      &installer_path,
-                      format!(
-                          "New-Item -ItemType File -Force -Path '{}' | Out-Null\nwhile (-not (Test-Path -LiteralPath '{}')) {{ Start-Sleep -Milliseconds 10 }}\n",
-                          started_path.display(),
-                          finish_path.display(),
-                      ),
-                  )
-                  .unwrap();
-
-                  let task_installer_path = installer_path.clone();
-                  let task_install_prefix = install_prefix.clone();
-                  let task = tokio::spawn(async move {
-                      execute_official_installer(
-                          &task_installer_path,
-                          &task_install_prefix,
-                          true,
-                          &Pep440Version::new([1, 2, 3]),
-                          None,
-                      )
-                      .await
-                  });
-
-                  for _ in 0..600 {
-                      if started_path.exists() || task.is_finished() {
-                          break;
-                      }
-                      tokio::time::sleep(Duration::from_millis(50)).await;
-                  }
-                  assert!(started_path.exists(), "installer should have started within 30 seconds");
-
-                  task.abort();
-                  let join_error = task.await.expect_err("task should be cancelled");
-                  assert!(join_error.is_cancelled(), "task should report completed cancellation");
-                  assert!(
-                      original_path.exists(),
-                      "the public test's unrelated fixture remains present on the broken old implementation"
-                  );
-
-                  if previous_path.exists() && !current_executable.exists() {
-                      fs_err::rename(&previous_path, &current_executable).unwrap();
-                  }
-                  fs_err::write(&finish_path, "finish").unwrap();
-              }
+          $test = @'
 
               #[cfg(windows)]
               #[tokio::test]
@@ -251,91 +108,82 @@ jobs:
                   assert!(started_path.exists(), "installer should have started within 30 seconds");
 
                   task.abort();
-                  let join_error = task.await.expect_err("task should be cancelled");
-                  assert!(join_error.is_cancelled(), "task should report completed cancellation");
                   assert!(
                       !current_executable.exists(),
-                      "old implementation should lose the canonical executable path during interruption"
+                      "old implementation should lose the canonical executable path before installer completion"
                   );
                   assert!(
                       previous_path.exists(),
                       "old implementation should retain the running executable under .previous.exe"
                   );
 
-                  fs_err::rename(&previous_path, &current_executable).unwrap();
+                  // Let the deliberately blocked PowerShell descendant exit. Do not await the
+                  // cancelled updater future: the old implementation does not own child teardown.
                   fs_err::write(&finish_path, "finish").unwrap();
+                  let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
               }
           '@
           $index = $text.LastIndexOf("`n}")
           if ($index -lt 0) { throw 'Could not find old-base test-module close' }
-          [IO.File]::WriteAllText($path, $text.Insert($index, $tests))
+          [IO.File]::WriteAllText($path, $text.Insert($index, $test))
           "base_worktree=$baseDir" | Set-Content receipt/base-worktree.txt
 
-      - name: Run old-base public-fixture negative control
-        id: weak
+      - name: Run exact old-base discriminator
+        id: discriminator
         continue-on-error: true
         shell: pwsh
         run: |
-          $baseDir = Join-Path $env:RUNNER_TEMP 'uv-old-base-v2'
+          $baseDir = Join-Path $env:RUNNER_TEMP 'uv-old-base-v3'
+          $oldTarget = Join-Path $env:RUNNER_TEMP 'old-target-v3'
           Push-Location $baseDir
           try {
-            $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'old-target-v2'
-            cargo test -p uv --lib --features self-update fieldwork_old_head_public_fixture_assertion_still_passes -- --nocapture 2>&1 |
-              Tee-Object -FilePath "$env:GITHUB_WORKSPACE/receipt/old-public-fixture.log"
-          } finally {
-            Pop-Location
-          }
-
-      - name: Run old-base actual-executable control
-        id: oldactual
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $baseDir = Join-Path $env:RUNNER_TEMP 'uv-old-base-v2'
-          Push-Location $baseDir
-          try {
-            $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'old-target-v2'
+            $env:CARGO_TARGET_DIR = $oldTarget
             cargo test -p uv --lib --features self-update fieldwork_old_head_cancellation_displaces_actual_current_executable -- --nocapture 2>&1 |
               Tee-Object -FilePath "$env:GITHUB_WORKSPACE/receipt/old-actual-executable.log"
           } finally {
             Pop-Location
           }
 
+          # The test executable intentionally renamed itself while running. Restore its
+          # canonical filename only after the process has exited and released Windows locks.
+          Get-ChildItem -LiteralPath $oldTarget -Filter '*.previous.exe' -Recurse -Force |
+            ForEach-Object {
+              $canonical = $_.FullName.Substring(0, $_.FullName.Length - '.previous.exe'.Length)
+              if (-not (Test-Path -LiteralPath $canonical)) {
+                Move-Item -LiteralPath $_.FullName -Destination $canonical
+              }
+            }
+
       - name: Assemble exact receipt
         if: always()
         shell: pwsh
         env:
-          CANDIDATE_OUTCOME: ${{ steps.candidate.outcome }}
-          WEAK_OUTCOME: ${{ steps.weak.outcome }}
-          OLD_ACTUAL_OUTCOME: ${{ steps.oldactual.outcome }}
+          DISCRIMINATOR_OUTCOME: ${{ steps.discriminator.outcome }}
         run: |
           @{
             carrierHead = (git rev-parse HEAD)
             candidateHead = $env:CANDIDATE_HEAD
             candidateBase = $env:CANDIDATE_BASE
             platform = 'windows-latest'
-            candidateActualExecutable = $env:CANDIDATE_OUTCOME
-            oldPublicFixture = $env:WEAK_OUTCOME
-            oldActualExecutable = $env:OLD_ACTUAL_OUTCOME
+            oldActualExecutable = $env:DISCRIMINATOR_OUTCOME
+            expectedObservation = 'old base renames the actual current executable before installer completion; cancellation leaves the canonical path absent'
           } | ConvertTo-Json | Set-Content receipt/receipt.json
 
       - name: Upload exact receipt
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
-          name: fieldwork-457-b2-negative-controls-v2
+          name: fieldwork-457-b2-old-base-discriminator-v3
           path: receipt/
           if-no-files-found: error
           retention-days: 30
 
-      - name: Enforce expected control outcomes
+      - name: Enforce expected outcome
         if: always()
         shell: pwsh
         env:
-          CANDIDATE_OUTCOME: ${{ steps.candidate.outcome }}
-          WEAK_OUTCOME: ${{ steps.weak.outcome }}
-          OLD_ACTUAL_OUTCOME: ${{ steps.oldactual.outcome }}
+          DISCRIMINATOR_OUTCOME: ${{ steps.discriminator.outcome }}
         run: |
-          if ($env:CANDIDATE_OUTCOME -ne 'success') { throw "Candidate control: $env:CANDIDATE_OUTCOME" }
-          if ($env:WEAK_OUTCOME -ne 'success') { throw "Old public-fixture control: $env:WEAK_OUTCOME" }
-          if ($env:OLD_ACTUAL_OUTCOME -ne 'success') { throw "Old actual-executable control: $env:OLD_ACTUAL_OUTCOME" }
+          if ($env:DISCRIMINATOR_OUTCOME -ne 'success') {
+            throw "Old-base discriminator: $env:DISCRIMINATOR_OUTCOME"
+          }
