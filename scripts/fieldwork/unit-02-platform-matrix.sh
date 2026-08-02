@@ -38,7 +38,7 @@ EOF
     candidate)
       cat >"$destination" <<'EOF'
 #!/bin/sh
-'''exec' "$(dirname "$(realpath "$0")")"/'python' "$0" "$@"
+'''exec' "$(dirname -- "$(realpath "$0")")"/'python' "$0" "$@"
 ' '''
 EOF
       ;;
