@@ -3,6 +3,7 @@ name: Fieldwork 457 B2 finalizer journal recovery
 on:
   pull_request:
     paths:
+      - .github/workflows/fieldwork-457-b2-deferred-finalizer.yml
       - .github/workflows/fieldwork-457-b2-finalizer-recovery.yml
       - crates/uv-windows/src/lib.rs
       - crates/uv-windows/src/update_finalizer.rs
@@ -34,6 +35,7 @@ jobs:
             throw 'Recovery experiment does not descend from exact finalizer experiment head'
           }
           $expected = @(
+            '.github/workflows/fieldwork-457-b2-deferred-finalizer.yml'
             '.github/workflows/fieldwork-457-b2-finalizer-recovery.yml'
             'crates/uv-windows/src/lib.rs'
             'crates/uv-windows/src/update_finalizer.rs'
