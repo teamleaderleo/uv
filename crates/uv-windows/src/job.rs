@@ -100,6 +100,16 @@ impl Job {
         Ok(job)
     }
 
+    /// Assigns a standard-library child process to this job object.
+    #[cfg(feature = "std")]
+    pub fn assign_child(&self, child: &std::process::Child) -> Result<(), JobError> {
+        use std::os::windows::io::{AsHandle, AsRawHandle};
+
+        let handle = child.as_handle();
+        // SAFETY: `handle` borrows a live `Child` process handle for this call.
+        unsafe { self.assign_process(HANDLE(handle.as_raw_handle())) }
+    }
+
     /// Assigns a process to this job object.
     ///
     /// # Safety
