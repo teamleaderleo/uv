@@ -35,6 +35,7 @@ jobs:
           }
           $expected = @(
             '.github/workflows/fieldwork-457-b2-deferred-finalizer.yml'
+            '.github/workflows/fieldwork-457-b2-finalizer-recovery.yml'
             'crates/uv-windows/src/lib.rs'
             'crates/uv-windows/src/update_finalizer.rs'
             'crates/uv/src/bin/fieldwork_deferred_update_finalizer.rs'
