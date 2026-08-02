@@ -1,8 +1,15 @@
+#[cfg(windows)]
 use std::env;
+#[cfg(windows)]
 use std::fs;
+#[cfg(windows)]
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+#[cfg(windows)]
+use std::process::{Command, Stdio};
+use std::process::ExitCode;
+#[cfg(windows)]
 use std::thread;
+#[cfg(windows)]
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
