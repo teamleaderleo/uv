@@ -21,7 +21,7 @@ env:
 jobs:
   focused-source-gate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check out exact source head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -44,8 +44,231 @@ jobs:
           git diff --check "$SOURCE_BASE"..."$SOURCE_SHA"
           test -z "$(git status --porcelain)"
 
+      - name: Apply parse-failure diagnostic experiment
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one match in {path}, found {count}")
+              path.write_text(text.replace(old, new, 1))
+
+          sources = Path("crates/uv-requirements/src/sources.rs")
+          replace_once(sources, "use uv_scripts::Pep723Metadata;\n", "")
+          replace_once(
+              sources,
+              '''        } else if is_uv_lockfile(&path) {
+                      return Err(anyhow::anyhow!(
+                          "The file `{}` appears to be a uv lockfile, but requirements must be specified in `requirements.txt` format",
+                          path.user_display(),
+                      ));
+          ''',
+              "",
+          )
+          replace_once(
+              sources,
+              '''
+          /// Returns `true` if the path names a lockfile that uv itself can generate.
+          fn is_uv_lockfile(path: &Path) -> bool {
+              if !path.is_file() {
+                  return false;
+              }
+
+              let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
+                  return false;
+              };
+
+              if file_name == "uv.lock" {
+                  return true;
+              }
+
+              let Some(script_name) = file_name
+                  .strip_suffix(".lock")
+                  .filter(|name| !name.is_empty())
+              else {
+                  return false;
+              };
+              let script_path = path.with_file_name(script_name);
+              let Ok(contents) = fs_err::read(script_path) else {
+                  return false;
+              };
+
+              Pep723Metadata::parse(&contents).is_ok_and(|metadata| metadata.is_some())
+          }
+          ''',
+              "",
+          )
+
+          specification = Path("crates/uv-requirements/src/specification.rs")
+          replace_once(
+              specification,
+              "use std::collections::BTreeMap;\nuse std::path::{Path, PathBuf};\n",
+              "use std::collections::BTreeMap;\nuse std::ffi::OsStr;\nuse std::path::{Path, PathBuf};\n",
+          )
+          replace_once(
+              specification,
+              '''                let requirements_txt =
+                              RequirementsTxt::parse_with_cache(path, &*CWD, client_builder, cache).await?;
+          ''',
+              '''                let requirements_txt =
+                              match RequirementsTxt::parse_with_cache(path, &*CWD, client_builder, cache)
+                                  .await
+                              {
+                                  Ok(requirements_txt) => requirements_txt,
+                                  Err(_) if is_uv_lockfile(path) => {
+                                      return Err(anyhow::anyhow!(
+                                          "The file `{}` appears to be a uv lockfile, but requirements must be specified in `requirements.txt` format",
+                                          path.user_display(),
+                                      ));
+                                  }
+                                  Err(err) => return Err(err.into()),
+                              };
+          ''',
+          )
+          replace_once(
+              specification,
+              "\n#[derive(Debug, Default, Clone)]\npub struct GroupsSpecification {\n",
+              '''
+          /// Returns `true` if the path follows a lockfile naming convention that uv itself emits.
+          ///
+          /// This check only runs after requirements parsing fails, so a valid requirements file keeps
+          /// its ordinary meaning even when its name overlaps with a uv lockfile convention.
+          fn is_uv_lockfile(path: &Path) -> bool {
+              if !path.is_file() {
+                  return false;
+              }
+
+              let Some(file_name) = path.file_name() else {
+                  return false;
+              };
+
+              if file_name == OsStr::new("uv.lock") {
+                  return true;
+              }
+
+              if path.extension() != Some(OsStr::new("lock")) {
+                  return false;
+              }
+
+              let Some(script_name) = path.file_stem().filter(|name| !name.is_empty()) else {
+                  return false;
+              };
+              let script_path = path.with_file_name(script_name);
+              let Ok(contents) = fs_err::read(script_path) else {
+                  return false;
+              };
+
+              Pep723Metadata::parse(&contents).is_ok_and(|metadata| metadata.is_some())
+          }
+
+          #[derive(Debug, Default, Clone)]
+          pub struct GroupsSpecification {
+          ''',
+          )
+
+          tests = Path("crates/uv/tests/pip_install/uv_lock_requirements.rs")
+          with tests.open("a") as file:
+              file.write(r'''
+
+          #[test]
+          fn accept_requirements_lock_next_to_pep723_script() -> Result<()> {
+              let context = uv_test::test_context!("3.12");
+              context.temp_dir.child("action.py").write_str(
+                  "# /// script\n# dependencies = []\n# ///\n\nprint('hello')\n",
+              )?;
+              context.temp_dir.child("action.py.lock").touch()?;
+
+              uv_snapshot!(context.pip_install()
+                  .arg("-r")
+                  .arg("action.py.lock")
+                  .arg("--strict"), @"
+              exit_code: 0 (success)
+              ----- stderr -----
+              warning: Requirements file `action.py.lock` does not contain any dependencies
+              Checked in [TIME]
+              "
+              );
+
+              Ok(())
+          }
+
+          #[test]
+          fn preserve_missing_uv_lock_error() -> Result<()> {
+              let context = uv_test::test_context!("3.12");
+
+              uv_snapshot!(context.pip_install()
+                  .arg("-r")
+                  .arg("uv.lock")
+                  .arg("--strict"), @"
+              exit_code: 2 (failure)
+              ----- stderr -----
+              error: File not found: `uv.lock`
+              "
+              );
+
+              Ok(())
+          }
+
+          #[cfg(unix)]
+          #[test]
+          fn reject_non_utf8_pep723_script_lock_as_requirements() -> Result<()> {
+              use std::ffi::OsString;
+              use std::os::unix::ffi::OsStringExt;
+              use std::path::PathBuf;
+
+              let context = uv_test::test_context!("3.12");
+              let script_name = PathBuf::from(OsString::from_vec(b"action-\xff.py".to_vec()));
+              context.temp_dir.child(&script_name).write_str(
+                  "# /// script\n# dependencies = []\n# ///\n\nprint('hello')\n",
+              )?;
+
+              context
+                  .lock()
+                  .arg("--script")
+                  .arg(&script_name)
+                  .assert()
+                  .success();
+
+              let mut lock_name = script_name.as_os_str().to_os_string();
+              lock_name.push(".lock");
+              let lock_name = PathBuf::from(lock_name);
+              assert!(context.temp_dir.child(&lock_name).path().is_file());
+
+              context
+                  .pip_install()
+                  .arg("-r")
+                  .arg(&lock_name)
+                  .arg("--strict")
+                  .assert()
+                  .failure()
+                  .stderr(predicates::str::contains("appears to be a uv lockfile"));
+
+              Ok(())
+          }
+          ''')
+          PY
+
       - name: Install Rust toolchain
-        run: rustup toolchain install --profile minimal
+        run: |
+          rustup toolchain install --profile minimal
+          rustup component add rustfmt
+
+      - name: Format and verify experiment fence
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff --name-only | sort > "$RUNNER_TEMP/experiment-files.txt"
+          cat > "$RUNNER_TEMP/expected-experiment-files.txt" <<'EOF'
+          crates/uv-requirements/src/sources.rs
+          crates/uv-requirements/src/specification.rs
+          crates/uv/tests/pip_install/uv_lock_requirements.rs
+          EOF
+          diff -u "$RUNNER_TEMP/expected-experiment-files.txt" "$RUNNER_TEMP/experiment-files.txt"
+          git diff --check
+          git diff --stat
 
       - name: Install test Python
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -55,20 +278,16 @@ jobs:
       - name: Provision Python 3.12
         run: uv python install 3.12
 
-      - name: Check formatting and compile affected crates
-        run: |
-          set -euo pipefail
-          rustup component add rustfmt
-          cargo fmt --all --check
-          cargo check -p uv-requirements -p uv
+      - name: Compile affected crates
+        run: cargo check -p uv-requirements -p uv
 
       - name: Run focused producer-backed regression tests
         env:
           RUST_BACKTRACE: 1
         run: cargo test -p uv --test pip_install uv_lock_requirements -- --nocapture
 
-      - name: Verify clean source tree
+      - name: Verify formatted experiment diff
         if: always()
         run: |
+          cargo fmt --all --check
           git diff --check
-          test -z "$(git status --porcelain)"
