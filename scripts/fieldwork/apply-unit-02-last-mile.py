@@ -39,7 +39,15 @@ if test_totals != {"realpath --": 2, "dirname --": 4}:
     raise SystemExit(f"unexpected test replacement totals: {test_totals}")
 
 run_text = RUN.read_text()
-function_marker = "#[cfg(unix)]\nfn copy_entrypoint(\n"
+function_marker = """/// Create a copy of the entrypoint at `source` at `target`, if it has a Python shebang, replacing
+/// the previous Python executable with a new one.
+///
+/// This is a no-op if the target already exists.
+///
+/// Note on Windows, the entrypoints do not use shebangs and require a rewrite of the trampoline.
+#[cfg(unix)]
+fn copy_entrypoint(
+"""
 constants = r"""#[cfg(unix)]
 const RELOCATABLE_SHEBANG: &str = r#"#!/bin/sh
 '''exec' "$(dirname "$(realpath "$0")")"/'python' "$0" "$@"
