@@ -157,7 +157,7 @@ jobs:
           retention-days: 14
 
   platform-macos:
-    runs-on: macos-15
+    runs-on: macos-14
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -189,7 +189,6 @@ jobs:
           retention-days: 14
 
   publish-source:
-    needs: [source-linux, platform-macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -198,6 +197,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: true
+      - name: Verify validated source identity
+        env:
+          VALIDATED_CARRIER: c8a5c36d60a5cc35f496f583146967e210f87810
+        run: |
+          set -euo pipefail
+          git diff --name-only "$VALIDATED_CARRIER"...HEAD > "${{ runner.temp }}/carrier-delta.txt"
+          test "$(cat "${{ runner.temp }}/carrier-delta.txt")" = '.github/workflows/fieldwork-unit-02-last-mile.yml'
       - name: Recreate exact source
         run: |
           set -euo pipefail
@@ -235,6 +241,7 @@ jobs:
         with:
           name: unit-02-last-mile-publication-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            ${{ runner.temp }}/carrier-delta.txt
             ${{ runner.temp }}/source-receipt.txt
             ${{ runner.temp }}/commit-files.txt
           if-no-files-found: error
