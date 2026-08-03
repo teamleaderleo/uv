@@ -13,17 +13,26 @@ def replace(old: str, new: str, count: int = 1) -> None:
 
 replace("use std::path::Path;\n", "use std::path::{Path, PathBuf};\n")
 replace(
+    "use uv_install_wheel::validate_and_heal_record;\n",
+    "use uv_install_wheel::validate_and_heal_record_with_manifest;\n",
+)
+replace(
     "                validate_and_heal_record(temp_dir.path(), files.iter(), dist)\n"
     "                    .map_err(Error::InstallWheelError)?;\n",
-    "                let members = validate_and_heal_record(temp_dir.path(), files.iter(), dist)\n"
-    "                    .map_err(Error::InstallWheelError)?;\n",
+    "                let members = validate_and_heal_record_with_manifest(\n"
+    "                    temp_dir.path(),\n"
+    "                    files.iter(),\n"
+    "                    dist,\n"
+    "                )\n"
+    "                .map_err(Error::InstallWheelError)?;\n",
     3,
 )
 replace(
     "        validate_and_heal_record(temp_dir.path(), files.iter(), dist)\n"
     "            .map_err(Error::InstallWheelError)?;\n",
-    "        let members = validate_and_heal_record(temp_dir.path(), files.iter(), dist)\n"
-    "            .map_err(Error::InstallWheelError)?;\n",
+    "        let members =\n"
+    "            validate_and_heal_record_with_manifest(temp_dir.path(), files.iter(), dist)\n"
+    "                .map_err(Error::InstallWheelError)?;\n",
 )
 replace(
     "                    filename.clone(),\n"
