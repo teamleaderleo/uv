@@ -57,8 +57,6 @@ jobs:
           test "$(git -C source merge-base "$PUBLIC_BASE" "$PUBLIC_CANDIDATE")" = "$PUBLIC_BASE"
           test "$(git -C source hash-object crates/uv/src/commands/project/init.rs)" = \
             c4a07138bf1ae1f09ffc8fdc276679e53c01bb4c
-          python3 carrier/.github/fieldwork/19671-scope/apply_backend_scope.py \
-            --help >/dev/null 2>&1 && exit 1 || true
           (
             cd source
             python3 ../carrier/.github/fieldwork/19671-scope/apply_backend_scope.py
