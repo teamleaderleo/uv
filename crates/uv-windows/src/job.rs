@@ -70,6 +70,14 @@ pub struct Job {
     handle: HANDLE,
 }
 
+// SAFETY: a Windows kernel handle is process-wide rather than thread-affine. `Job` owns exactly
+// one handle, exposes only OS calls that accept that handle from any thread, and closes it exactly
+// once in `Drop`. Moving ownership between threads does not invalidate the handle or introduce an
+// additional closer. This marker is required when the job remains alive across an await in a
+// `Send` updater future.
+#[allow(unsafe_code)]
+unsafe impl Send for Job {}
+
 impl Job {
     /// Creates existing wrapper-oriented job object.
     ///
