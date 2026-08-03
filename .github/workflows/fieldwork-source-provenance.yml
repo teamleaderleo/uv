@@ -78,6 +78,11 @@ jobs:
         run: |
           git apply --check fieldwork/source-provenance-probe/uv-dev-304.diff
           git apply fieldwork/source-provenance-probe/uv-dev-304.diff
+
+      - name: Apply isolated draft compile repair
+        run: |
+          git apply --check fieldwork/source-provenance-probe/uv-dev-304-build-fix.diff
+          git apply fieldwork/source-provenance-probe/uv-dev-304-build-fix.diff
           git diff --check
 
       - name: Install bootstrap uv
@@ -106,7 +111,7 @@ jobs:
 
       - name: Run editable and non-editable matrix
         env:
-          UV_VERSION: uv-dev-304-675839b0
+          UV_VERSION: uv-dev-304-675839b0-plus-semicolon
         run: bash fieldwork/source-provenance-probe/run.sh
 
       - name: Upload exact draft-validation receipts
