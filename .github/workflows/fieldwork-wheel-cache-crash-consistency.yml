@@ -41,7 +41,8 @@ jobs:
           python3 -m py_compile \
             fieldwork/wheel-cache-crash-consistency/crash_model.py \
             fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
-            fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py
+            fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
+            fieldwork/wheel-cache-crash-consistency/repro_missing_http_archive.py
           git -C uv-current apply --check \
             ../fieldwork/wheel-cache-crash-consistency/missing-local-archive-candidate.patch
 
@@ -97,6 +98,27 @@ jobs:
           assert receipt['stale_pointer_survived'] is True, receipt
           PY
 
+      - name: Execute current-head missing HTTP archive baseline
+        run: |
+          set +e
+          python3 fieldwork/wheel-cache-crash-consistency/repro_missing_http_archive.py \
+            --uv uv-current/target/debug/uv \
+            | tee fieldwork-wheel-cache-missing-http-archive-baseline.json
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -eq 0
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(
+              Path('fieldwork-wheel-cache-missing-http-archive-baseline.json').read_text()
+          )
+          assert receipt['outcome'] == 'bug-reproduced', receipt
+          assert receipt['source_wheel_unchanged'] is True, receipt
+          assert receipt['stale_pointer_survived'] is True, receipt
+          PY
+
       - name: Install rustfmt for pinned toolchain
         run: rustup component add rustfmt
 
@@ -140,6 +162,27 @@ jobs:
           assert receipt['stale_pointer_survived'] is False, receipt
           PY
 
+      - name: Execute current-head missing HTTP archive candidate
+        run: |
+          set +e
+          python3 fieldwork/wheel-cache-crash-consistency/repro_missing_http_archive.py \
+            --uv uv-current/target/debug/uv \
+            | tee fieldwork-wheel-cache-missing-http-archive-candidate.json
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -eq 0
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(
+              Path('fieldwork-wheel-cache-missing-http-archive-candidate.json').read_text()
+          )
+          assert receipt['outcome'] == 'recovered', receipt
+          assert receipt['source_wheel_unchanged'] is True, receipt
+          assert receipt['stale_pointer_survived'] is False, receipt
+          PY
+
       - name: Run focused crate tests
         working-directory: uv-current
         run: |
@@ -155,7 +198,9 @@ jobs:
             fieldwork-wheel-cache-crash-model.json
             fieldwork-wheel-cache-corruption.json
             fieldwork-wheel-cache-missing-local-archive-baseline.json
+            fieldwork-wheel-cache-missing-http-archive-baseline.json
             fieldwork-wheel-cache-missing-local-archive-candidate.json
+            fieldwork-wheel-cache-missing-http-archive-candidate.json
             fieldwork-wheel-cache-missing-archive-tested.patch
             fieldwork-wheel-cache-missing-archive-files.txt
           if-no-files-found: warn
