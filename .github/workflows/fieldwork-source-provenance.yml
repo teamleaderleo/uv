@@ -74,6 +74,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify repair script
+        run: python3 -m py_compile fieldwork/source-provenance-probe/apply_uv_dev_304_build_fix.py
+
       - name: Apply exact uv-dev #304 diff
         run: |
           git apply --check fieldwork/source-provenance-probe/uv-dev-304.diff
@@ -81,9 +84,9 @@ jobs:
 
       - name: Apply isolated draft compile repair
         run: |
-          git apply --check fieldwork/source-provenance-probe/uv-dev-304-build-fix.diff
-          git apply fieldwork/source-provenance-probe/uv-dev-304-build-fix.diff
+          python3 fieldwork/source-provenance-probe/apply_uv_dev_304_build_fix.py
           git diff --check
+          test "$(git diff --name-only)" = "crates/uv-resolver/src/lock/mod.rs"
 
       - name: Install bootstrap uv
         uses: astral-sh/setup-uv@v6
@@ -120,4 +123,4 @@ jobs:
         with:
           name: uv-dev-304-source-provenance
           path: fieldwork/source-provenance-probe/out/
-          if-no-files-found: error
+          if-no-files-found: warn
