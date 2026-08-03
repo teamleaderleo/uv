@@ -173,3 +173,46 @@ jobs:
           path: receipt/
           if-no-files-found: error
           retention-days: 30
+
+  materialize-source:
+    name: Materialize validated source candidate
+    needs:
+      - cross-target-check
+      - generation-rollback
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      CANDIDATE_HEAD: 8d9324af47e1b52ec1f57f9232bd408281282cf5
+      SOURCE_BRANCH: candidate/457-b2-windows-generation-rollback
+    steps:
+      - name: Check out validated experiment
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Generate exact product source on public candidate base
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/fieldwork/457-b2/inject_generation_rollback.py "$RUNNER_TEMP/inject_generation_rollback.py"
+          cp .github/fieldwork/457-b2/polish_generation_rollback.py "$RUNNER_TEMP/polish_generation_rollback.py"
+          git checkout --detach "$CANDIDATE_HEAD"
+          python "$RUNNER_TEMP/inject_generation_rollback.py"
+          python "$RUNNER_TEMP/polish_generation_rollback.py"
+          rustup component add rustfmt
+          cargo fmt --all
+          git diff --check
+          test "$(git diff --name-only "$CANDIDATE_HEAD")" = 'crates/uv/src/commands/self_update.rs'
+
+      - name: Commit source-only candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Fieldwork Agent'
+          git config user.email 'fieldwork-agent@users.noreply.github.com'
+          git checkout -B "$SOURCE_BRANCH"
+          git add crates/uv/src/commands/self_update.rs
+          git commit -m 'Roll back failed Windows update generations'
+          git push --force-with-lease origin "HEAD:refs/heads/$SOURCE_BRANCH"
