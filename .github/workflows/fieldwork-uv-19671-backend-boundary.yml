@@ -1,0 +1,100 @@
+name: Fieldwork uv stubs backend boundary
+
+on:
+  push:
+    branches:
+      - research/uv-19671-backend-boundary
+    paths:
+      - .github/fieldwork/19671-backend-matrix.sh
+      - .github/workflows/fieldwork-uv-19671-backend-boundary.yml
+  pull_request:
+    paths:
+      - .github/fieldwork/19671-backend-matrix.sh
+      - .github/workflows/fieldwork-uv-19671-backend-boundary.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-uv-19671-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  boundary:
+    name: ${{ matrix.variant }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - variant: baseline
+            source_sha: 3d00ce70244d8b5660e8c02136568a9147dc97e8
+          - variant: active-pr
+            source_sha: 082af3c5eb95bbc0f0173ebc67965919c14e1a0a
+
+    steps:
+      - name: Check out controlled carrier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+          path: carrier
+
+      - name: Check out exact Astral source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: astral-sh/uv
+          ref: ${{ matrix.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: source
+
+      - name: Verify exact carrier and product identities
+        env:
+          EXPECTED_SHA: ${{ matrix.source_sha }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "$EXPECTED_SHA"
+          mkdir -p "artifacts/$VARIANT"
+          {
+            echo "variant=$VARIANT"
+            echo "source_head=$EXPECTED_SHA"
+            echo "init_blob=$(git -C source hash-object crates/uv/src/commands/project/init.rs)"
+            echo "backend_blob=$(git -C source hash-object crates/uv-build-backend/src/lib.rs)"
+            echo "carrier_head=$(git -C carrier rev-parse HEAD)"
+          } >"artifacts/$VARIANT/source-identity.txt"
+          git -C carrier diff --check
+          bash -n carrier/.github/fieldwork/19671-backend-matrix.sh
+
+      - name: Install Rust toolchain
+        uses: moonrepo/setup-rust@abb2d32350334249b178c401e5ec5836e0cd88d3
+        with:
+          cache-base: uv-19671-${{ matrix.variant }}
+          cache-target: debug
+
+      - name: Build exact uv source
+        working-directory: source
+        run: cargo build --bin uv
+
+      - name: Run eight-backend discriminator
+        env:
+          VARIANT: ${{ matrix.variant }}
+          UV_NO_PROGRESS: 1
+        run: |
+          set -euo pipefail
+          bash carrier/.github/fieldwork/19671-backend-matrix.sh \
+            "$PWD/source/target/debug/uv" \
+            "$VARIANT" \
+            "$PWD/artifacts/$VARIANT"
+
+      - name: Upload exact backend evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-19671-${{ matrix.variant }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/${{ matrix.variant }}/
+          if-no-files-found: error
+          retention-days: 30
