@@ -41,9 +41,11 @@ jobs:
           test "$actual" = "$expected"
           git diff --check "$JOB_EXPERIMENT_BASE..HEAD"
 
-      - name: Install Windows Rust target
+      - name: Install Windows Rust target and formatter
         shell: bash
-        run: rustup target add x86_64-pc-windows-msvc
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          rustup component add rustfmt
 
       - name: Apply and cross-check proposed source
         shell: bash
@@ -105,6 +107,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          rustup component add rustfmt
           python .github/fieldwork/457-b2/inject_strict_installer_job.py
           cargo fmt --all
           git diff --check
