@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: fieldwork-457-b2-deferred-finalizer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   deferred-finalizer:
     name: Windows staged finalize-after-exit prototype
@@ -76,85 +80,148 @@ jobs:
           $matrixRoot = Join-Path $env:RUNNER_TEMP 'deferred-finalizer-matrix'
           New-Item -ItemType Directory -Force -Path $matrixRoot | Out-Null
 
-          function Start-Blocker {
-            Start-Process -FilePath 'powershell' -ArgumentList @(
+          $parentScript = Join-Path $matrixRoot 'launch-finalizer-parent.ps1'
+          @'
+          param([Parameter(Mandatory = $true)][string]$ConfigPath)
+          $ErrorActionPreference = 'Stop'
+          $config = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json
+          $arguments = @("$PID", [string]$config.canonical, [string]$config.replacement)
+          foreach ($argument in @($config.extraArgs)) {
+            if ($null -ne $argument -and [string]$argument -ne '') {
+              $arguments += [string]$argument
+            }
+          }
+          $child = Start-Process -FilePath ([string]$config.helper) -ArgumentList $arguments `
+            -PassThru -NoNewWindow `
+            -RedirectStandardOutput ([string]$config.childStdout) `
+            -RedirectStandardError ([string]$config.childStderr)
+          Set-Content -LiteralPath ([string]$config.childPidPath) -Value $child.Id
+          Set-Content -LiteralPath ([string]$config.readyPath) -Value $PID
+          while ($true) { Start-Sleep -Seconds 1 }
+          '@ | Set-Content -LiteralPath $parentScript -Encoding utf8
+
+          function Wait-ForFile([string]$path, [string]$description) {
+            $deadline = (Get-Date).AddSeconds(20)
+            while (-not (Test-Path -LiteralPath $path)) {
+              if ((Get-Date) -ge $deadline) {
+                throw "Timed out waiting for $description at $path"
+              }
+              Start-Sleep -Milliseconds 100
+            }
+          }
+
+          function Start-ParentFinalizer(
+            [string]$name,
+            [string]$canonical,
+            [string]$replacement,
+            [string[]]$extraArgs
+          ) {
+            $readyPath = Join-Path $matrixRoot "$name-parent-ready.txt"
+            $childPidPath = Join-Path $matrixRoot "$name-child-pid.txt"
+            $configPath = Join-Path $matrixRoot "$name-config.json"
+            $parentStdout = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-parent-stdout.txt"
+            $parentStderr = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-parent-stderr.txt"
+            $childStdout = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-stdout.txt"
+            $childStderr = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-stderr.txt"
+            @{
+              helper = $helper
+              canonical = $canonical
+              replacement = $replacement
+              extraArgs = @($extraArgs)
+              readyPath = $readyPath
+              childPidPath = $childPidPath
+              childStdout = $childStdout
+              childStderr = $childStderr
+            } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $configPath
+
+            $parent = Start-Process -FilePath 'powershell' -ArgumentList @(
               '-NoProfile',
-              '-Command',
-              'Start-Sleep -Seconds 60'
-            ) -PassThru -WindowStyle Hidden
+              '-File',
+              $parentScript,
+              $configPath
+            ) -PassThru -WindowStyle Hidden `
+              -RedirectStandardOutput $parentStdout -RedirectStandardError $parentStderr
+
+            Wait-ForFile $readyPath "$name parent readiness"
+            Wait-ForFile $childPidPath "$name finalizer pid"
+            $recordedParentId = [int](Get-Content -Raw -LiteralPath $readyPath)
+            if ($recordedParentId -ne $parent.Id) {
+              throw "$name parent identity mismatch: launched=$($parent.Id) recorded=$recordedParentId"
+            }
+            $childPid = [int](Get-Content -Raw -LiteralPath $childPidPath)
+            $child = Get-Process -Id $childPid -ErrorAction Stop
+            [pscustomobject]@{
+              Parent = $parent
+              Child = $child
+            }
           }
 
-          function Start-Finalizer($name, $parentId, $canonical, $replacement, $extraArgs) {
-            $stdout = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-stdout.txt"
-            $stderr = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-stderr.txt"
-            $arguments = @("$parentId", $canonical, $replacement) + $extraArgs
-            Start-Process -FilePath $helper -ArgumentList $arguments -PassThru -NoNewWindow `
-              -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          function Stop-ParentAndWait($state) {
+            Stop-Process -Id $state.Parent.Id -Force
+            $state.Parent.WaitForExit(15000) | Out-Null
+            if (-not $state.Parent.HasExited) {
+              throw "parent process $($state.Parent.Id) did not exit"
+            }
           }
 
-          # Control 1: all staging occurs while the old canonical file remains available;
-          # replacement commits only after the parent exits.
+          function Wait-ForChildExit($state, [int]$expectedCode, [string]$description) {
+            $state.Child.WaitForExit(15000) | Out-Null
+            if (-not $state.Child.HasExited -or $state.Child.ExitCode -ne $expectedCode) {
+              throw "$description: exited=$($state.Child.HasExited) code=$($state.Child.ExitCode)"
+            }
+          }
+
+          # Control 1: staging occurs while old canonical remains available; commit follows parent exit.
           $deferredDir = Join-Path $matrixRoot 'deferred'
           New-Item -ItemType Directory -Force -Path $deferredDir | Out-Null
           $deferredCanonical = Join-Path $deferredDir 'uv.exe'
           $deferredReplacement = Join-Path $matrixRoot 'new-uv.exe'
           Set-Content -NoNewline -Path $deferredCanonical -Value 'old-version'
           Set-Content -NoNewline -Path $deferredReplacement -Value 'new-version'
-          $deferredBlocker = Start-Blocker
-          $deferredHelper = Start-Finalizer 'deferred' $deferredBlocker.Id $deferredCanonical $deferredReplacement @()
+          $deferred = Start-ParentFinalizer 'deferred' $deferredCanonical $deferredReplacement @()
           Start-Sleep -Seconds 1
-          if ($deferredHelper.HasExited) { throw 'finalizer exited before its parent' }
+          if ($deferred.Child.HasExited) { throw 'finalizer exited before its actual parent' }
           if ((Get-Content -Raw $deferredCanonical) -ne 'old-version') {
-            throw 'canonical file changed while parent was still running'
+            throw 'canonical file changed while actual parent was still running'
           }
-          Stop-Process -Id $deferredBlocker.Id -Force
-          $deferredHelper.WaitForExit(15000)
-          if (-not $deferredHelper.HasExited -or $deferredHelper.ExitCode -ne 0) {
-            throw "deferred finalizer failed: exited=$($deferredHelper.HasExited) code=$($deferredHelper.ExitCode)"
-          }
+          Stop-ParentAndWait $deferred
+          Wait-ForChildExit $deferred 0 'deferred finalizer failed'
           if ((Get-Content -Raw $deferredCanonical) -ne 'new-version') {
-            throw 'replacement was not committed after parent exit'
+            throw 'replacement was not committed after actual parent exit'
           }
           if (Get-ChildItem -LiteralPath $deferredDir -Force | Where-Object Name -Match 'update-(stage|backup|journal)') {
             throw 'successful finalization left transaction files behind'
           }
 
-          # Control 2: a missing replacement fails before waiting and before touching canonical.
+          # Control 2: missing replacement fails before waiting and before touching canonical.
           $missingDir = Join-Path $matrixRoot 'missing'
           New-Item -ItemType Directory -Force -Path $missingDir | Out-Null
           $missingCanonical = Join-Path $missingDir 'uv.exe'
           $missingReplacement = Join-Path $matrixRoot 'does-not-exist.exe'
           Set-Content -NoNewline -Path $missingCanonical -Value 'old-version'
-          $missingBlocker = Start-Blocker
-          $missingHelper = Start-Finalizer 'missing' $missingBlocker.Id $missingCanonical $missingReplacement @()
-          $missingHelper.WaitForExit(15000)
-          if (-not $missingHelper.HasExited -or $missingHelper.ExitCode -ne 42) {
-            throw "missing-stage control returned unexpected result: exited=$($missingHelper.HasExited) code=$($missingHelper.ExitCode)"
-          }
-          if ($missingBlocker.HasExited) { throw 'missing-stage control unexpectedly waited for parent exit' }
+          $missing = Start-ParentFinalizer 'missing' $missingCanonical $missingReplacement @()
+          Wait-ForChildExit $missing 42 'missing-stage control returned unexpected result'
+          if ($missing.Parent.HasExited) { throw 'missing-stage control unexpectedly waited for parent exit' }
           if ((Get-Content -Raw $missingCanonical) -ne 'old-version') {
             throw 'missing-stage control changed canonical file'
           }
-          Stop-Process -Id $missingBlocker.Id -Force
+          Stop-ParentAndWait $missing
 
-          # Control 3: an ordinary failure after backup restores the old canonical file.
+          # Control 3: ordinary failure after backup restores old canonical.
           $rollbackDir = Join-Path $matrixRoot 'rollback'
           New-Item -ItemType Directory -Force -Path $rollbackDir | Out-Null
           $rollbackCanonical = Join-Path $rollbackDir 'uv.exe'
           $rollbackReplacement = Join-Path $matrixRoot 'rollback-new-uv.exe'
           Set-Content -NoNewline -Path $rollbackCanonical -Value 'old-version'
           Set-Content -NoNewline -Path $rollbackReplacement -Value 'new-version'
-          $rollbackBlocker = Start-Blocker
-          $rollbackHelper = Start-Finalizer 'rollback' $rollbackBlocker.Id $rollbackCanonical $rollbackReplacement @('--fail-after-backup')
+          $rollback = Start-ParentFinalizer 'rollback' $rollbackCanonical $rollbackReplacement @('--fail-after-backup')
           Start-Sleep -Seconds 1
+          if ($rollback.Child.HasExited) { throw 'rollback finalizer exited before its actual parent' }
           if ((Get-Content -Raw $rollbackCanonical) -ne 'old-version') {
-            throw 'rollback control changed canonical file before parent exit'
+            throw 'rollback control changed canonical file before actual parent exit'
           }
-          Stop-Process -Id $rollbackBlocker.Id -Force
-          $rollbackHelper.WaitForExit(15000)
-          if (-not $rollbackHelper.HasExited -or $rollbackHelper.ExitCode -ne 42) {
-            throw "rollback control returned unexpected result: exited=$($rollbackHelper.HasExited) code=$($rollbackHelper.ExitCode)"
-          }
+          Stop-ParentAndWait $rollback
+          Wait-ForChildExit $rollback 42 'rollback control returned unexpected result'
           if ((Get-Content -Raw $rollbackCanonical) -ne 'old-version') {
             throw 'ordinary commit failure did not restore old canonical file'
           }
@@ -163,6 +230,7 @@ jobs:
           }
 
           @{
+            authority = 'finalizer child opens and waits on its actual parent process'
             deferredCommit = 'pass'
             missingStageFailsBeforeCanonicalMutation = 'pass'
             ordinaryCommitFailureRollsBack = 'pass'
