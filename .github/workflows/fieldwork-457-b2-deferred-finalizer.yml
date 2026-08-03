@@ -63,6 +63,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          rustup component add rustfmt 2>&1 | Tee-Object -FilePath receipt/rustfmt-install.log
           cargo fmt --all --check 2>&1 | Tee-Object -FilePath receipt/fmt.log
           cargo build -p uv --bin fieldwork_deferred_update_finalizer --features self-update 2>&1 |
             Tee-Object -FilePath receipt/build.log
