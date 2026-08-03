@@ -1,0 +1,122 @@
+name: Fieldwork uv stubs backend scope
+
+on:
+  push:
+    branches:
+      - fieldwork/19671-uv-backend-scope
+    paths:
+      - .github/fieldwork/19671-scope/**
+      - .github/workflows/fieldwork-uv-19671-backend-scope.yml
+  pull_request:
+    paths:
+      - .github/fieldwork/19671-scope/**
+      - .github/workflows/fieldwork-uv-19671-backend-scope.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-uv-19671-scope-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PUBLIC_CANDIDATE: 082af3c5eb95bbc0f0173ebc67965919c14e1a0a
+  PUBLIC_BASE: 3d00ce70244d8b5660e8c02136568a9147dc97e8
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  scoped-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+
+    steps:
+      - name: Check out controlled carrier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: carrier
+
+      - name: Check out exact public candidate
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: astral-sh/uv
+          ref: ${{ env.PUBLIC_CANDIDATE }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+
+      - name: Verify identities and apply scoped repair
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "$PUBLIC_CANDIDATE"
+          test "$(git -C source merge-base "$PUBLIC_BASE" "$PUBLIC_CANDIDATE")" = "$PUBLIC_BASE"
+          test "$(git -C source hash-object crates/uv/src/commands/project/init.rs)" = \
+            c4a07138bf1ae1f09ffc8fdc276679e53c01bb4c
+          python3 carrier/.github/fieldwork/19671-scope/apply_backend_scope.py \
+            --help >/dev/null 2>&1 && exit 1 || true
+          (
+            cd source
+            python3 ../carrier/.github/fieldwork/19671-scope/apply_backend_scope.py
+          )
+          git -C source diff --check
+          git -C source diff --name-only | sort >changed-files.txt
+          printf '%s\n' crates/uv/src/commands/project/init.rs >expected-files.txt
+          diff -u expected-files.txt changed-files.txt
+          bash -n carrier/.github/fieldwork/19671-scope/backend_matrix.sh
+          mkdir -p artifacts/scoped
+          {
+            echo "public_base=$PUBLIC_BASE"
+            echo "public_candidate=$PUBLIC_CANDIDATE"
+            echo "carrier_head=$(git -C carrier rev-parse HEAD)"
+            echo "candidate_init_blob=c4a07138bf1ae1f09ffc8fdc276679e53c01bb4c"
+          } >artifacts/scoped/source-identity.txt
+          git -C source diff -- crates/uv/src/commands/project/init.rs \
+            >artifacts/scoped/scoped.patch
+
+      - name: Install Rust toolchain
+        uses: moonrepo/setup-rust@abb2d32350334249b178c401e5ec5836e0cd88d3
+        with:
+          cache-base: uv-19671-backend-scope
+          cache-target: debug
+
+      - name: Format, compile, and run native init controls
+        working-directory: source
+        run: |
+          set -euo pipefail
+          rustup component add rustfmt
+          cargo fmt --all --check
+          cargo check -p uv
+          cargo test --package uv --test it init::init_package_stubs -- --exact
+          cargo test --package uv --test it init::init_package -- --exact
+          cargo build --bin uv
+
+      - name: Run eight-backend build matrix
+        env:
+          UV_NO_PROGRESS: 1
+        run: |
+          set -euo pipefail
+          bash carrier/.github/fieldwork/19671-scope/backend_matrix.sh \
+            "$PWD/source/target/debug/uv" \
+            "$PWD/artifacts/scoped"
+
+      - name: Verify clean bounded source diff
+        if: always()
+        run: |
+          set -euo pipefail
+          git -C source diff --check
+          git -C source diff --name-only | sort >final-files.txt
+          diff -u expected-files.txt final-files.txt
+
+      - name: Upload exact scoped-candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-19671-backend-scope-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/scoped/
+          if-no-files-found: error
+          retention-days: 30
