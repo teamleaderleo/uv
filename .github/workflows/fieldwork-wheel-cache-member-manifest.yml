@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      CURRENT_SOURCE_HEAD: 79bbface771210df216b738e9bdc7df95e5a9e6b
+      CURRENT_SOURCE_HEAD: 0cf7c4561b7c7159ab9479719a12573d0a6aa3bb
       CLEAN_SOURCE_BRANCH: fix/validate-extracted-wheel-cache-members
     steps:
       - name: Check out exact carrier
@@ -31,7 +31,7 @@ jobs:
       - name: Check out exact current uv source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: fieldwork/upstream-79bbface
+          ref: fieldwork/upstream-0cf7c456
           path: uv-current
           persist-credentials: false
 
@@ -43,12 +43,30 @@ jobs:
             fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
             fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
             fieldwork/wheel-cache-crash-consistency/repro_missing_http_archive.py \
+            fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
             fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py \
             fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py \
             fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py \
             fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py
-          git -C uv-current apply --check \
-            ../fieldwork/wheel-cache-crash-consistency/missing-local-archive-candidate.patch
+          cp -R uv-current uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py \
+            uv-transform-check
+          git -C uv-transform-check diff --check
+          test "$(git -C uv-transform-check diff --name-only)" = "$(printf '%s\n' \
+            crates/uv-distribution/src/archive.rs \
+            crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-install-wheel/src/lib.rs \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-installer/src/plan.rs)"
+          rm -rf uv-transform-check
 
       - name: Build exact current baseline
         working-directory: uv-current
@@ -74,8 +92,8 @@ jobs:
 
       - name: Apply pointer and member-manifest candidate
         run: |
-          git -C uv-current apply \
-            ../fieldwork/wheel-cache-crash-consistency/missing-local-archive-candidate.patch
+          python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
+            uv-current
           python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py uv-current
           python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py uv-current
           python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py uv-current
