@@ -7,6 +7,12 @@ on:
     paths:
       - .github/workflows/fieldwork-draft304.yml
       - fieldwork/source-provenance-probe/**
+  pull_request:
+    branches:
+      - research/upstream-79bb-base
+    paths:
+      - .github/workflows/fieldwork-draft304.yml
+      - fieldwork/source-provenance-probe/**
   workflow_dispatch:
 
 permissions:
