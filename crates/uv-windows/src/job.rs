@@ -9,6 +9,8 @@
 //! to ensure child processes don't become orphaned when the wrapper is killed.
 
 use core::ffi::c_void;
+#[cfg(feature = "std")]
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::System::JobObjects::{
@@ -67,16 +69,13 @@ impl std::error::Error for JobError {}
 /// break away so they can create or join their own jobs. [`Job::new_strict_tree`] is experimental
 /// alternative for process trees that must remain supervised through descendants.
 pub struct Job {
+    /// `OwnedHandle` supplies single-owner close semantics and standard-library thread mobility.
+    #[cfg(feature = "std")]
+    handle: OwnedHandle,
+    /// The no-std build retains the existing raw-handle owner and explicit `Drop` implementation.
+    #[cfg(not(feature = "std"))]
     handle: HANDLE,
 }
-
-// SAFETY: a Windows kernel handle is process-wide rather than thread-affine. `Job` owns exactly
-// one handle, exposes only OS calls that accept that handle from any thread, and closes it exactly
-// once in `Drop`. Moving ownership between threads does not invalidate the handle or introduce an
-// additional closer. This marker is required when the job remains alive across an await in a
-// `Send` updater future.
-#[allow(unsafe_code)]
-unsafe impl Send for Job {}
 
 impl Job {
     /// Creates existing wrapper-oriented job object.
@@ -103,9 +102,29 @@ impl Job {
         let handle =
             unsafe { CreateJobObjectW(None, None) }.map_err(|e| JobError::Create(e.code().0))?;
 
+        #[cfg(feature = "std")]
+        let job = Self {
+            // SAFETY: `CreateJobObjectW` returned a newly owned valid handle. Ownership transfers
+            // exactly once to `OwnedHandle`, which closes it on drop.
+            handle: unsafe { OwnedHandle::from_raw_handle(handle.0) },
+        };
+        #[cfg(not(feature = "std"))]
         let job = Self { handle };
+
         job.configure_limits(silent_breakaway)?;
         Ok(job)
+    }
+
+    #[must_use]
+    fn raw_handle(&self) -> HANDLE {
+        #[cfg(feature = "std")]
+        {
+            HANDLE(self.handle.as_raw_handle())
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            self.handle
+        }
     }
 
     /// Assigns standard-library child process to this job object.
@@ -140,9 +159,9 @@ impl Job {
     /// Caller must ensure `process_handle` is valid process handle.
     #[allow(unsafe_code)]
     pub unsafe fn assign_process(&self, process_handle: HANDLE) -> Result<(), JobError> {
-        // SAFETY: Caller guarantees process_handle is valid. self.handle is valid because it was
-        // created by CreateJobObjectW and is owned until Drop.
-        unsafe { AssignProcessToJobObject(self.handle, process_handle) }
+        // SAFETY: Caller guarantees process_handle is valid. The job handle remains valid because
+        // it is owned by `self` until drop.
+        unsafe { AssignProcessToJobObject(self.raw_handle(), process_handle) }
             .map_err(|e| JobError::Assign(e.code().0))
     }
 
@@ -150,12 +169,13 @@ impl Job {
     fn configure_limits(&self, silent_breakaway: bool) -> Result<(), JobError> {
         let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         let info_size = u32::try_from(size_of_val(&info)).expect("job info size fits in u32");
+        let handle = self.raw_handle();
 
         // SAFETY: We pass valid job handle, correct information class, properly sized buffer,
         // and buffer size.
         unsafe {
             QueryInformationJobObject(
-                Some(self.handle),
+                Some(handle),
                 JobObjectExtendedLimitInformation,
                 (&raw mut info).cast::<c_void>(),
                 info_size,
@@ -173,7 +193,7 @@ impl Job {
         // struct, and its size.
         unsafe {
             SetInformationJobObject(
-                self.handle,
+                handle,
                 JobObjectExtendedLimitInformation,
                 (&raw const info).cast::<c_void>(),
                 info_size,
@@ -183,6 +203,7 @@ impl Job {
     }
 }
 
+#[cfg(not(feature = "std"))]
 impl Drop for Job {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
