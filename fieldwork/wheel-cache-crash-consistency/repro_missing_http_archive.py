@@ -250,6 +250,7 @@ def main() -> int:
 
         removed_root = roots_before[0]
         removed_root_relative = str(removed_root.relative_to(cache))
+        removed_root_absolute = str(removed_root)
         shutil.rmtree(removed_root)
 
         second_venv, second_install = install_once(
@@ -271,10 +272,20 @@ def main() -> int:
             and str(roots_after[0].relative_to(cache)) != removed_root_relative
         )
         stale_pointer_survived = pointers_before == pointers_after
+        second_failure_text = "\n".join(
+            f"{step['stdout']}\n{step['stderr']}" for step in second_install
+        )
+        second_failure_mentions_removed_archive = (
+            removed_root_relative in second_failure_text
+            or removed_root_absolute in second_failure_text
+        )
 
         if recovered:
             outcome = "recovered"
-        elif not successful_install(second_install) and stale_pointer_survived:
+        elif (
+            not successful_install(second_install)
+            and second_failure_mentions_removed_archive
+        ):
             outcome = "bug-reproduced"
         elif successful_install(second_install) and not successful_verification(second_verify):
             outcome = "bug-reproduced"
@@ -296,6 +307,7 @@ def main() -> int:
             "pointers_before": pointers_before,
             "pointers_after": pointers_after,
             "stale_pointer_survived": stale_pointer_survived,
+            "second_failure_mentions_removed_archive": second_failure_mentions_removed_archive,
             "first_install": first_install,
             "first_verification": first_verify,
             "second_install": second_install,
