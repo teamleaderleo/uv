@@ -97,7 +97,14 @@ jobs:
             -RedirectStandardError ([string]$config.childStderr)
           Set-Content -LiteralPath ([string]$config.childPidPath) -Value $child.Id
           Set-Content -LiteralPath ([string]$config.readyPath) -Value $PID
-          while ($true) { Start-Sleep -Seconds 1 }
+          $exitRecorded = $false
+          while ($true) {
+            if (-not $exitRecorded -and $child.HasExited) {
+              Set-Content -LiteralPath ([string]$config.childExitPath) -Value $child.ExitCode
+              $exitRecorded = $true
+            }
+            Start-Sleep -Milliseconds 100
+          }
           '@ | Set-Content -LiteralPath $parentScript -Encoding utf8
 
           function Wait-ForFile([string]$path, [string]$description) {
@@ -118,6 +125,7 @@ jobs:
           ) {
             $readyPath = Join-Path $matrixRoot "$name-parent-ready.txt"
             $childPidPath = Join-Path $matrixRoot "$name-child-pid.txt"
+            $childExitPath = Join-Path $matrixRoot "$name-child-exit.txt"
             $configPath = Join-Path $matrixRoot "$name-config.json"
             $parentStdout = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-parent-stdout.txt"
             $parentStderr = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-parent-stderr.txt"
@@ -130,6 +138,7 @@ jobs:
               extraArgs = @($extraArgs)
               readyPath = $readyPath
               childPidPath = $childPidPath
+              childExitPath = $childExitPath
               childStdout = $childStdout
               childStderr = $childStderr
             } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $configPath
@@ -149,10 +158,12 @@ jobs:
               throw "$name parent identity mismatch: launched=$($parent.Id) recorded=$recordedParentId"
             }
             $childPid = [int](Get-Content -Raw -LiteralPath $childPidPath)
-            $child = Get-Process -Id $childPid -ErrorAction Stop
+            $child = Get-Process -Id $childPid -ErrorAction SilentlyContinue
             [pscustomobject]@{
               Parent = $parent
               Child = $child
+              ChildPid = $childPid
+              ChildExitPath = $childExitPath
             }
           }
 
@@ -164,10 +175,28 @@ jobs:
             }
           }
 
+          function Assert-ChildStillRunning($state, [string]$description) {
+            if ($null -eq $state.Child) {
+              throw "$description exited before a live process handle was acquired"
+            }
+            if ($state.Child.HasExited) {
+              throw "$description exited early with code $($state.Child.ExitCode)"
+            }
+          }
+
           function Wait-ForChildExit($state, [int]$expectedCode, [string]$description) {
-            $state.Child.WaitForExit(15000) | Out-Null
-            if (-not $state.Child.HasExited -or $state.Child.ExitCode -ne $expectedCode) {
-              throw "$description: exited=$($state.Child.HasExited) code=$($state.Child.ExitCode)"
+            if ($null -ne $state.Child) {
+              $state.Child.WaitForExit(15000) | Out-Null
+              if (-not $state.Child.HasExited) {
+                throw "$description: child $($state.ChildPid) did not exit"
+              }
+              $actualCode = $state.Child.ExitCode
+            } else {
+              Wait-ForFile $state.ChildExitPath "$description exit code"
+              $actualCode = [int](Get-Content -Raw -LiteralPath $state.ChildExitPath)
+            }
+            if ($actualCode -ne $expectedCode) {
+              throw "$description: expected code=$expectedCode actual=$actualCode"
             }
           }
 
@@ -180,7 +209,7 @@ jobs:
           Set-Content -NoNewline -Path $deferredReplacement -Value 'new-version'
           $deferred = Start-ParentFinalizer 'deferred' $deferredCanonical $deferredReplacement @()
           Start-Sleep -Seconds 1
-          if ($deferred.Child.HasExited) { throw 'finalizer exited before its actual parent' }
+          Assert-ChildStillRunning $deferred 'deferred finalizer'
           if ((Get-Content -Raw $deferredCanonical) -ne 'old-version') {
             throw 'canonical file changed while actual parent was still running'
           }
@@ -216,7 +245,7 @@ jobs:
           Set-Content -NoNewline -Path $rollbackReplacement -Value 'new-version'
           $rollback = Start-ParentFinalizer 'rollback' $rollbackCanonical $rollbackReplacement @('--fail-after-backup')
           Start-Sleep -Seconds 1
-          if ($rollback.Child.HasExited) { throw 'rollback finalizer exited before its actual parent' }
+          Assert-ChildStillRunning $rollback 'rollback finalizer'
           if ((Get-Content -Raw $rollbackCanonical) -ne 'old-version') {
             throw 'rollback control changed canonical file before actual parent exit'
           }
@@ -231,6 +260,7 @@ jobs:
 
           @{
             authority = 'finalizer child opens and waits on its actual parent process'
+            fastExitReceipt = 'parent records child exit code when the child exits before outer handle acquisition'
             deferredCommit = 'pass'
             missingStageFailsBeforeCanonicalMutation = 'pass'
             ordinaryCommitFailureRollsBack = 'pass'
