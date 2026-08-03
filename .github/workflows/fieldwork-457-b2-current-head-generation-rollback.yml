@@ -10,6 +10,62 @@ permissions:
   contents: read
 
 jobs:
+  cross-target-check:
+    name: Cross-check generated Windows source
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CANDIDATE_HEAD: 8d9324af47e1b52ec1f57f9232bd408281282cf5
+      CI: 1
+    steps:
+      - name: Check out exact experiment
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact base and experiment fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git merge-base HEAD "$CANDIDATE_HEAD")" = "$CANDIDATE_HEAD"
+          expected=$(printf '%s\n' \
+            .github/fieldwork/457-b2/inject_generation_rollback.py \
+            .github/workflows/fieldwork-457-b2-current-head-generation-rollback.yml | sort)
+          actual=$(git diff --name-only "$CANDIDATE_HEAD..HEAD" | sort)
+          test "$actual" = "$expected"
+          git diff --check "$CANDIDATE_HEAD..HEAD"
+          mkdir -p receipt-cross
+          {
+            echo "experiment_head=$(git rev-parse HEAD)"
+            echo "candidate_head=$CANDIDATE_HEAD"
+            echo "runner=$RUNNER_OS"
+          } > receipt-cross/identity.txt
+          rustc --version | tee receipt-cross/rust-version.txt
+          cargo --version | tee receipt-cross/cargo-version.txt
+
+      - name: Apply and cross-check proposed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/fieldwork/457-b2/inject_generation_rollback.py
+          rustup component add rustfmt
+          rustup target add x86_64-pc-windows-msvc
+          cargo fmt --all --check 2>&1 | tee receipt-cross/fmt.log
+          git diff --check
+          git diff -- crates/uv/src/commands/self_update.rs > receipt-cross/proposed-source.diff
+          cargo check -p uv --all-targets --features self-update --target x86_64-pc-windows-msvc 2>&1 |
+            tee receipt-cross/check.log
+
+      - name: Upload cross-target receipt
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: fieldwork-457-b2-current-head-generation-rollback-cross
+          path: receipt-cross/
+          if-no-files-found: error
+          retention-days: 30
+
   generation-rollback:
     name: Windows ordinary-error generation rollback
     runs-on: windows-latest
