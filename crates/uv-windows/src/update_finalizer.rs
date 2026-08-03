@@ -1,9 +1,10 @@
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{self, Write};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 
-use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{
     INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
 };
@@ -20,10 +21,11 @@ pub struct UpdateFinalizeOptions {
 /// Stage a replacement next to the canonical file, wait for the parent process to exit,
 /// then commit the replacement with an explicit backup and ordinary-error rollback.
 ///
-/// The important ordering guarantee is that all validation and the potentially slow copy happen
-/// before the canonical file is touched. The remaining commit section contains only same-directory
-/// renames. A small journal records enough information for a future recovery pass if the machine
-/// loses power between those renames.
+/// The important ordering guarantee is that parent-process authority is acquired before the
+/// potentially slow copy, and all validation and copying happen before the canonical file is
+/// touched. The remaining commit section contains only same-directory renames. A small journal
+/// records enough information for a future recovery pass if the machine loses power between those
+/// renames.
 pub fn finalize_update_after_process_exit(
     parent_process_id: u32,
     canonical: &Path,
@@ -32,6 +34,11 @@ pub fn finalize_update_after_process_exit(
 ) -> io::Result<()> {
     ensure_regular_file(canonical, "canonical executable")?;
     ensure_regular_file(replacement, "staged replacement")?;
+
+    // Acquire a synchronization handle before any slow staging work. The handle continues to
+    // identify the original process object if the parent exits while the replacement is copied;
+    // reopening by PID afterward would introduce an exit/PID-reuse race.
+    let parent_process = open_process_for_wait(parent_process_id)?;
 
     let parent = canonical.parent().ok_or_else(|| {
         io::Error::new(
@@ -61,7 +68,7 @@ pub fn finalize_update_after_process_exit(
     sync_file(&staged)?;
     write_journal(&journal, canonical, &staged, &backup)?;
 
-    wait_for_process_exit(parent_process_id)?;
+    wait_for_process_exit(&parent_process, parent_process_id)?;
 
     fs::rename(canonical, &backup)?;
 
@@ -139,13 +146,18 @@ fn remove_if_exists(path: &Path) -> io::Result<()> {
     }
 }
 
-fn wait_for_process_exit(process_id: u32) -> io::Result<()> {
+fn open_process_for_wait(process_id: u32) -> io::Result<OwnedHandle> {
+    #[allow(unsafe_code)]
     let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, process_id) }
         .map_err(|error| io::Error::other(error.to_string()))?;
-    let wait_result = unsafe { WaitForSingleObject(handle, INFINITE) };
-    let close_result = unsafe { CloseHandle(handle) };
 
-    close_result.map_err(|error| io::Error::other(error.to_string()))?;
+    #[allow(unsafe_code)]
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle.0) })
+}
+
+fn wait_for_process_exit(handle: &OwnedHandle, process_id: u32) -> io::Result<()> {
+    #[allow(unsafe_code)]
+    let wait_result = unsafe { WaitForSingleObject(HANDLE(handle.as_raw_handle()), INFINITE) };
     if wait_result != WAIT_OBJECT_0 {
         return Err(io::Error::other(format!(
             "waiting for parent process {process_id} returned {wait_result:?}"
