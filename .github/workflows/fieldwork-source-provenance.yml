@@ -9,6 +9,7 @@ on:
     branches:
       - main
       - research/upstream-79bb-base
+      - research/source-provenance-order-20260802
     paths:
       - .github/workflows/fieldwork-source-provenance.yml
       - fieldwork/source-provenance-probe/**
@@ -58,7 +59,7 @@ jobs:
           if-no-files-found: error
 
   validate-uv-dev-304:
-    if: github.ref == 'refs/heads/research/validate-uv-dev-304-20260803' || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/research/validate-uv-dev-304-20260803' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     name: uv-dev #304 broader matrix
     runs-on: ubuntu-24.04
     timeout-minutes: 45
