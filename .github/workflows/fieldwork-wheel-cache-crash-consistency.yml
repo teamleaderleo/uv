@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 90
     env:
       CURRENT_SOURCE_HEAD: 79bbface771210df216b738e9bdc7df95e5a9e6b
+      CLEAN_SOURCE_BRANCH: fix/missing-extracted-wheel-archive-recovery
     steps:
       - name: Check out exact owned carrier head
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -188,6 +189,36 @@ jobs:
           cargo test --locked -p uv-distribution archive::tests
           cargo test --locked -p uv-installer plan::tests
 
+      - name: Publish exact clean source branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git -C uv-current config user.name "teamleaderleo"
+          git -C uv-current config user.email "13091533+teamleaderleo@users.noreply.github.com"
+          git -C uv-current switch -C "$CLEAN_SOURCE_BRANCH"
+          git -C uv-current add -- \
+            crates/uv-distribution/src/archive.rs \
+            crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-installer/src/plan.rs
+          git -C uv-current diff --cached --check
+          git -C uv-current diff --cached --name-only \
+            > fieldwork-wheel-cache-clean-source-files.txt
+          test "$(cat fieldwork-wheel-cache-clean-source-files.txt)" = "$(printf '%s\n' \
+            crates/uv-distribution/src/archive.rs \
+            crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-installer/src/plan.rs)"
+          git -C uv-current commit -m "fix: ignore cache pointers to missing wheel archives"
+          git -C uv-current diff-tree --no-commit-id --name-only -r HEAD \
+            > fieldwork-wheel-cache-clean-source-commit-files.txt
+          cmp \
+            fieldwork-wheel-cache-clean-source-files.txt \
+            fieldwork-wheel-cache-clean-source-commit-files.txt
+          git -C uv-current push --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${CLEAN_SOURCE_BRANCH}"
+          git -C uv-current rev-parse HEAD \
+            > fieldwork-wheel-cache-clean-source-head.txt
+
       - name: Upload exact receipts
         if: always()
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
@@ -202,5 +233,8 @@ jobs:
             fieldwork-wheel-cache-missing-http-archive-candidate.json
             fieldwork-wheel-cache-missing-archive-tested.patch
             fieldwork-wheel-cache-missing-archive-files.txt
+            fieldwork-wheel-cache-clean-source-files.txt
+            fieldwork-wheel-cache-clean-source-commit-files.txt
+            fieldwork-wheel-cache-clean-source-head.txt
           if-no-files-found: warn
           retention-days: 30
