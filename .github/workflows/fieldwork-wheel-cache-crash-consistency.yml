@@ -18,22 +18,32 @@ jobs:
   linux-target:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      CURRENT_SOURCE_HEAD: 79bbface771210df216b738e9bdc7df95e5a9e6b
     steps:
-      - name: Check out exact owned head
+      - name: Check out exact owned carrier head
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - name: Verify exact source and probe syntax
+      - name: Check out exact current uv source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fieldwork/upstream-79bbface
+          path: uv-current
+          persist-credentials: false
+
+      - name: Verify exact identities and probe syntax
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git -C uv-current rev-parse HEAD)" = "$CURRENT_SOURCE_HEAD"
           python3 -m py_compile \
             fieldwork/wheel-cache-crash-consistency/crash_model.py \
             fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
             fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py
-          git apply --check \
-            fieldwork/wheel-cache-crash-consistency/missing-local-archive-candidate.patch
+          git -C uv-current apply --check \
+            ../fieldwork/wheel-cache-crash-consistency/missing-local-archive-candidate.patch
 
       - name: Execute bounded crash-state model
         run: |
@@ -52,24 +62,25 @@ jobs:
           )
           PY
 
-      - name: Build exact baseline uv CLI
+      - name: Build exact current baseline uv CLI
+        working-directory: uv-current
         run: cargo build --locked --bin uv
 
-      - name: Execute isolated extracted-wheel corruption probe
+      - name: Execute current-head extracted-wheel corruption probe
         run: |
           set +e
           python3 fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
-            --uv target/debug/uv \
+            --uv uv-current/target/debug/uv \
             | tee fieldwork-wheel-cache-corruption.json
           status=${PIPESTATUS[0]}
           set -e
           test "$status" -eq 0
 
-      - name: Execute missing local archive baseline
+      - name: Execute current-head missing local archive baseline
         run: |
           set +e
           python3 fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
-            --uv target/debug/uv \
+            --uv uv-current/target/debug/uv \
             | tee fieldwork-wheel-cache-missing-local-archive-baseline.json
           status=${PIPESTATUS[0]}
           set -e
@@ -89,21 +100,30 @@ jobs:
       - name: Install rustfmt for pinned toolchain
         run: rustup component add rustfmt
 
-      - name: Apply bounded local archive candidate
+      - name: Apply bounded pointer archive candidate
         run: |
-          git apply \
-            fieldwork/wheel-cache-crash-consistency/missing-local-archive-candidate.patch
-          git diff --check
-          cargo fmt --all -- --check
+          git -C uv-current apply \
+            ../fieldwork/wheel-cache-crash-consistency/missing-local-archive-candidate.patch
+          git -C uv-current diff --check
+          (cd uv-current && cargo fmt --all -- --check)
+          git -C uv-current diff --binary \
+            > fieldwork-wheel-cache-missing-archive-tested.patch
+          git -C uv-current diff --name-only \
+            > fieldwork-wheel-cache-missing-archive-files.txt
+          test "$(cat fieldwork-wheel-cache-missing-archive-files.txt)" = "$(printf '%s\n' \
+            crates/uv-distribution/src/archive.rs \
+            crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-installer/src/plan.rs)"
 
-      - name: Build candidate uv CLI
+      - name: Build current-head candidate uv CLI
+        working-directory: uv-current
         run: cargo build --locked --bin uv
 
-      - name: Execute missing local archive candidate
+      - name: Execute current-head missing local archive candidate
         run: |
           set +e
           python3 fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
-            --uv target/debug/uv \
+            --uv uv-current/target/debug/uv \
             | tee fieldwork-wheel-cache-missing-local-archive-candidate.json
           status=${PIPESTATUS[0]}
           set -e
@@ -117,7 +137,14 @@ jobs:
           )
           assert receipt['outcome'] == 'recovered', receipt
           assert receipt['source_wheel_unchanged'] is True, receipt
+          assert receipt['stale_pointer_survived'] is False, receipt
           PY
+
+      - name: Run focused crate tests
+        working-directory: uv-current
+        run: |
+          cargo test --locked -p uv-distribution archive::tests
+          cargo test --locked -p uv-installer plan::tests
 
       - name: Upload exact receipts
         if: always()
@@ -129,5 +156,7 @@ jobs:
             fieldwork-wheel-cache-corruption.json
             fieldwork-wheel-cache-missing-local-archive-baseline.json
             fieldwork-wheel-cache-missing-local-archive-candidate.json
+            fieldwork-wheel-cache-missing-archive-tested.patch
+            fieldwork-wheel-cache-missing-archive-files.txt
           if-no-files-found: warn
           retention-days: 30
