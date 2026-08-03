@@ -124,6 +124,7 @@ jobs:
             [string[]]$extraArgs
           ) {
             $readyPath = Join-Path $matrixRoot "$name-parent-ready.txt"
+            $finalizerReadyPath = Join-Path $matrixRoot "$name-finalizer-ready.txt"
             $childPidPath = Join-Path $matrixRoot "$name-child-pid.txt"
             $childExitPath = Join-Path $matrixRoot "$name-child-exit.txt"
             $configPath = Join-Path $matrixRoot "$name-config.json"
@@ -131,11 +132,12 @@ jobs:
             $parentStderr = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-parent-stderr.txt"
             $childStdout = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-stdout.txt"
             $childStderr = Join-Path $env:GITHUB_WORKSPACE "receipt/$name-stderr.txt"
+            $finalizerArgs = @('--ready-file', $finalizerReadyPath) + @($extraArgs)
             @{
               helper = $helper
               canonical = $canonical
               replacement = $replacement
-              extraArgs = @($extraArgs)
+              extraArgs = $finalizerArgs
               readyPath = $readyPath
               childPidPath = $childPidPath
               childExitPath = $childExitPath
@@ -164,6 +166,7 @@ jobs:
               Child = $child
               ChildPid = $childPid
               ChildExitPath = $childExitPath
+              FinalizerReadyPath = $finalizerReadyPath
             }
           }
 
@@ -200,6 +203,17 @@ jobs:
             }
           }
 
+          function Assert-ReadyMarker($state, [string]$description) {
+            Wait-ForFile $state.FinalizerReadyPath "$description parent-handle marker"
+            $marker = Get-Content -Raw -LiteralPath $state.FinalizerReadyPath
+            if ($marker -notmatch "parent_process_id=$($state.Parent.Id)") {
+              throw "$description marker does not identify actual parent $($state.Parent.Id): $marker"
+            }
+            if ($marker -notmatch "finalizer_process_id=$($state.ChildPid)") {
+              throw "$description marker does not identify finalizer $($state.ChildPid): $marker"
+            }
+          }
+
           # Control 1: staging occurs while old canonical remains available; commit follows parent exit.
           $deferredDir = Join-Path $matrixRoot 'deferred'
           New-Item -ItemType Directory -Force -Path $deferredDir | Out-Null
@@ -208,7 +222,7 @@ jobs:
           Set-Content -NoNewline -Path $deferredCanonical -Value 'old-version'
           Set-Content -NoNewline -Path $deferredReplacement -Value 'new-version'
           $deferred = Start-ParentFinalizer 'deferred' $deferredCanonical $deferredReplacement @()
-          Start-Sleep -Seconds 1
+          Assert-ReadyMarker $deferred 'deferred finalizer'
           Assert-ChildStillRunning $deferred 'deferred finalizer'
           if ((Get-Content -Raw $deferredCanonical) -ne 'old-version') {
             throw 'canonical file changed while actual parent was still running'
@@ -222,7 +236,7 @@ jobs:
             throw 'successful finalization left transaction files behind'
           }
 
-          # Control 2: missing replacement fails before waiting and before touching canonical.
+          # Control 2: missing replacement fails before opening/waiting and before touching canonical.
           $missingDir = Join-Path $matrixRoot 'missing'
           New-Item -ItemType Directory -Force -Path $missingDir | Out-Null
           $missingCanonical = Join-Path $missingDir 'uv.exe'
@@ -230,6 +244,9 @@ jobs:
           Set-Content -NoNewline -Path $missingCanonical -Value 'old-version'
           $missing = Start-ParentFinalizer 'missing' $missingCanonical $missingReplacement @()
           Wait-ForChildExit $missing 42 'missing-stage control returned unexpected result'
+          if (Test-Path -LiteralPath $missing.FinalizerReadyPath) {
+            throw 'missing-stage control reported parent-handle readiness despite invalid replacement'
+          }
           if ($missing.Parent.HasExited) { throw 'missing-stage control unexpectedly waited for parent exit' }
           if ((Get-Content -Raw $missingCanonical) -ne 'old-version') {
             throw 'missing-stage control changed canonical file'
@@ -244,7 +261,7 @@ jobs:
           Set-Content -NoNewline -Path $rollbackCanonical -Value 'old-version'
           Set-Content -NoNewline -Path $rollbackReplacement -Value 'new-version'
           $rollback = Start-ParentFinalizer 'rollback' $rollbackCanonical $rollbackReplacement @('--fail-after-backup')
-          Start-Sleep -Seconds 1
+          Assert-ReadyMarker $rollback 'rollback finalizer'
           Assert-ChildStillRunning $rollback 'rollback finalizer'
           if ((Get-Content -Raw $rollbackCanonical) -ne 'old-version') {
             throw 'rollback control changed canonical file before actual parent exit'
@@ -259,8 +276,9 @@ jobs:
           }
 
           @{
-            authority = 'finalizer child opens and waits on its actual parent process'
-            fastExitReceipt = 'parent records child exit code when the child exits before outer handle acquisition'
+            authority = 'finalizer child acquires and owns handle to actual parent before readiness marker'
+            parentContract = 'updater must wait for finalizer readiness marker before exiting'
+            fastExitReceipt = 'parent records child exit code when invalid input fails before outer handle acquisition'
             deferredCommit = 'pass'
             missingStageFailsBeforeCanonicalMutation = 'pass'
             ordinaryCommitFailureRollsBack = 'pass'
