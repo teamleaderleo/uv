@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: fieldwork-457-b2-generation-rollback-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   cross-target-check:
     name: Cross-check generated Windows source
