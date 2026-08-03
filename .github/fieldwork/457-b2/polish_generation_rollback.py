@@ -32,4 +32,31 @@ for old, new in {
     mid_copy = mid_copy.replace(old, new, 1)
 
 text = text[:mid_copy_start] + mid_copy + text[mid_copy_end:]
+
+running_snapshot_test = r'''
+
+    #[cfg(windows)]
+    #[test]
+    fn fieldwork_current_head_generation_rollback_can_snapshot_running_executable() -> Result<()> {
+        let rollback_dir = TempDir::new()?;
+        let current_executable = std::env::current_exe()?;
+        let snapshot = WindowsUpdateSnapshot::capture(
+            &current_executable,
+            rollback_dir.path(),
+            0,
+        )?;
+        let backup = snapshot
+            .backup
+            .as_deref()
+            .context("running executable snapshot should have backup bytes")?;
+        assert!(backup.is_file());
+        assert!(files_are_equal(&current_executable, backup)?);
+        Ok(())
+    }
+'''
+
+module_end = text.rfind("\n}")
+if module_end < 0:
+    raise SystemExit("test module closing brace not found")
+text = text[:module_end] + running_snapshot_test + text[module_end:]
 path.write_text(text, encoding="utf-8")
