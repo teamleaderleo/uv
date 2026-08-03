@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/source-provenance-order-20260802
+      - research/validate-uv-dev-304-20260803
   pull_request:
     branches:
       - main
@@ -17,7 +18,8 @@ permissions:
   contents: read
 
 jobs:
-  source-provenance:
+  released-versions:
+    if: github.ref == 'refs/heads/research/source-provenance-order-20260802' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     name: uv ${{ matrix.uv-version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -52,5 +54,60 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: uv-source-provenance-${{ matrix.uv-version }}
+          path: fieldwork/source-provenance-probe/out/
+          if-no-files-found: error
+
+  validate-uv-dev-304:
+    if: github.ref == 'refs/heads/research/validate-uv-dev-304-20260803' || github.event_name == 'workflow_dispatch'
+    name: uv-dev #304 broader matrix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out validation branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Apply exact uv-dev #304 diff
+        run: |
+          git apply --check fieldwork/source-provenance-probe/uv-dev-304.diff
+          git apply fieldwork/source-provenance-probe/uv-dev-304.diff
+          git diff --check
+
+      - name: Install bootstrap uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.12.1
+          enable-cache: false
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Build patched uv
+        run: cargo build --bin uv
+
+      - name: Put patched uv first on PATH
+        run: |
+          mkdir -p "$RUNNER_TEMP/fieldwork-bin"
+          ln -s "$GITHUB_WORKSPACE/target/debug/uv" "$RUNNER_TEMP/fieldwork-bin/uv"
+          echo "$RUNNER_TEMP/fieldwork-bin" >> "$GITHUB_PATH"
+
+      - name: Verify patched binary identity
+        run: |
+          command -v uv
+          uv --version
+          git diff --stat
+
+      - name: Run editable and non-editable matrix
+        env:
+          UV_VERSION: uv-dev-304-675839b0
+        run: bash fieldwork/source-provenance-probe/run.sh
+
+      - name: Upload exact draft-validation receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-dev-304-source-provenance
           path: fieldwork/source-provenance-probe/out/
           if-no-files-found: error
