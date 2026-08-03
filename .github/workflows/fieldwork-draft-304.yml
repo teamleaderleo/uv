@@ -1,0 +1,46 @@
+name: Fieldwork UV draft 304
+
+on:
+  pull_request:
+    branches:
+      - research/upstream-79bb-base
+    paths:
+      - .github/workflows/fieldwork-draft-304.yml
+      - fieldwork/source-provenance-probe/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  draft-304-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact research merge
+        uses: actions/checkout@v5
+
+      - name: Apply uv-dev draft 304 production patch
+        run: git apply --check fieldwork/source-provenance-probe/draft-304-production.patch && git apply fieldwork/source-provenance-probe/draft-304-production.patch
+
+      - name: Build patched uv
+        run: cargo build --package uv --bin uv
+
+      - name: Use patched uv binary
+        run: echo "$GITHUB_WORKSPACE/target/debug" >> "$GITHUB_PATH"
+
+      - name: Install Python 3.12
+        run: target/debug/uv python install 3.12
+
+      - name: Run unchanged source-provenance matrix
+        env:
+          UV_VERSION: draft-304-675839b0
+        run: bash fieldwork/source-provenance-probe/run.sh
+
+      - name: Upload exact probe receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-source-provenance-draft-304
+          path: fieldwork/source-provenance-probe/out/
+          if-no-files-found: error
