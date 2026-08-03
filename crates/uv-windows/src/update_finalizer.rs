@@ -1,5 +1,5 @@
 use std::ffi::OsStr;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
@@ -10,12 +10,17 @@ use windows::Win32::System::Threading::{
 };
 
 /// Options used by the experimental deferred update finalizer.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct UpdateFinalizeOptions {
     /// Inject an ordinary failure after the old canonical file has moved to its backup.
     ///
     /// This is used only by the Fieldwork executable to prove rollback behavior.
     pub fail_after_backup: bool,
+    /// Optional marker written only after the finalizer owns a handle to the exact parent process.
+    ///
+    /// The updating parent can wait for this marker before exiting, closing the spawn-to-open race
+    /// without trusting a later PID lookup.
+    pub ready_path: Option<PathBuf>,
 }
 
 /// Stage a replacement next to the canonical file, wait for the parent process to exit,
@@ -39,6 +44,9 @@ pub fn finalize_update_after_process_exit(
     // identify the original process object if the parent exits while the replacement is copied;
     // reopening by PID afterward would introduce an exit/PID-reuse race.
     let parent_process = open_process_for_wait(parent_process_id)?;
+    if let Some(ready_path) = options.ready_path.as_deref() {
+        write_ready_marker(ready_path, parent_process_id)?;
+    }
 
     let parent = canonical.parent().ok_or_else(|| {
         io::Error::new(
@@ -116,6 +124,13 @@ fn ensure_regular_file(path: &Path, description: &str) -> io::Result<()> {
 
 fn sync_file(path: &Path) -> io::Result<()> {
     File::open(path)?.sync_all()
+}
+
+fn write_ready_marker(path: &Path, parent_process_id: u32) -> io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    writeln!(file, "parent_process_id={parent_process_id}")?;
+    writeln!(file, "finalizer_process_id={}", std::process::id())?;
+    file.sync_all()
 }
 
 fn write_journal(
