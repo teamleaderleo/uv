@@ -54,6 +54,7 @@ jobs:
           python .github/fieldwork/457-b2/polish_generation_rollback.py
           rustup component add rustfmt
           rustup target add x86_64-pc-windows-msvc
+          cargo fmt --all
           cargo fmt --all --check 2>&1 | tee receipt-cross/fmt.log
           git diff --check
           git diff -- crates/uv/src/commands/self_update.rs > receipt-cross/proposed-source.diff
@@ -123,6 +124,7 @@ jobs:
           python .github/fieldwork/457-b2/inject_generation_rollback.py
           python .github/fieldwork/457-b2/polish_generation_rollback.py
           rustup component add rustfmt
+          cargo fmt --all
           cargo fmt --all --check 2>&1 | Tee-Object -FilePath receipt/fmt.log
           git diff --check
           git diff -- crates/uv/src/commands/self_update.rs | Set-Content receipt/proposed-source.diff
