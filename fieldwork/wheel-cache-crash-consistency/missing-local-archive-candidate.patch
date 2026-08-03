@@ -1,13 +1,48 @@
-diff --git a/crates/uv-distribution/src/distribution_database.rs b/crates/uv-distribution/src/distribution_database.rs
---- a/crates/uv-distribution/src/distribution_database.rs
-+++ b/crates/uv-distribution/src/distribution_database.rs
-@@ -1111,7 +1111,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
-         let archive = pointer
-             .filter(|pointer| pointer.is_up_to_date(modified))
-             .map(PathArchivePointer::into_archive)
--            .filter(|archive| archive.has_digests(hashes));
-+            .filter(|archive| archive.has_digests(hashes))
-+            .filter(|archive| archive.exists(self.build_context.cache()));
+diff --git a/crates/uv-distribution/src/archive.rs b/crates/uv-distribution/src/archive.rs
+--- a/crates/uv-distribution/src/archive.rs
++++ b/crates/uv-distribution/src/archive.rs
+@@ -42,7 +42,7 @@ impl Archive {
+     }
  
-         // If the file is already unzipped, and the cache is up-to-date, return it.
-         if let Some(archive) = archive {
+     /// Returns `true` if the archive exists in the cache.
+-    pub(crate) fn exists(&self, cache: &Cache) -> bool {
++    pub fn exists(&self, cache: &Cache) -> bool {
+         self.version == ARCHIVE_VERSION && cache.archive(&self.id).exists()
+     }
+ }
+diff --git a/crates/uv-installer/src/plan.rs b/crates/uv-installer/src/plan.rs
+--- a/crates/uv-installer/src/plan.rs
++++ b/crates/uv-installer/src/plan.rs
+@@ -440,7 +440,8 @@ impl<'a> Planner<'a> {
+                             let cache_info = pointer.to_cache_info();
+                             let build_info = pointer.to_build_info();
+                             let archive = pointer.into_archive();
+-                            if archive.satisfies(hasher.get(dist.as_ref())) {
++                            if archive.exists(cache)
++                                && archive.satisfies(hasher.get(dist.as_ref()))
++                            {
+                                 let cached_dist = CachedDirectUrlDist {
+                                     filename: wheel.filename.clone(),
+                                     url: VerbatimParsedUrl {
+@@ -503,7 +504,8 @@ impl<'a> Planner<'a> {
+                                     let cache_info = pointer.to_cache_info();
+                                     let build_info = pointer.to_build_info();
+                                     let archive = pointer.into_archive();
+-                                    if archive.satisfies(hasher.get(dist.as_ref())) {
++                                    if archive.exists(cache)
++                                        && archive.satisfies(hasher.get(dist.as_ref()))
++                                    {
+                                         let cached_dist = CachedDirectUrlDist {
+                                             filename: wheel.filename.clone(),
+                                             url: VerbatimParsedUrl {
+@@ -551,7 +553,8 @@ impl<'a> Planner<'a> {
+                             let cache_info = pointer.to_cache_info();
+                             let build_info = pointer.to_build_info();
+                             let archive = pointer.into_archive();
+-                            if archive.satisfies(hasher.get(dist.as_ref())) {
++                            if archive.exists(cache)
++                                && archive.satisfies(hasher.get(dist.as_ref()))
++                            {
+                                 let cached_dist = CachedDirectUrlDist {
+                                     filename: wheel.filename.clone(),
+                                     url: VerbatimParsedUrl {
