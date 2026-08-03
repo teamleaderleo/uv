@@ -37,7 +37,7 @@ replace(
     ") -> Result<Vec<(PathBuf, u64)>, Error> {\n"
     "    let mut unpacked_files: BTreeMap<PathBuf, u64> = unpacked_wheel\n"
     "        .into_iter()\n"
-    "        .map(|(path, size)| (path.clone(), *size))\n"
+    "        .map(|(path, size)| (uv_fs::normalize_path(path).into_owned(), *size))\n"
     "        .collect();\n\n"
     "    // On the filesystem: The unpacked files of the wheel.\n"
     "    let mut files: BTreeMap<&Path, u64> = unpacked_files\n"
