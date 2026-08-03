@@ -18,9 +18,29 @@ fn main() -> ExitCode {
     let Some(replacement) = args.next() else {
         return usage("missing replacement path");
     };
-    let fail_after_backup = args.next().is_some_and(|arg| arg == "--fail-after-backup");
-    if args.next().is_some() {
-        return usage("too many arguments");
+
+    let mut fail_after_backup = false;
+    let mut ready_path = None;
+    while let Some(argument) = args.next() {
+        if argument == "--fail-after-backup" {
+            if fail_after_backup {
+                return usage("duplicate --fail-after-backup");
+            }
+            fail_after_backup = true;
+        } else if argument == "--ready-file" {
+            if ready_path.is_some() {
+                return usage("duplicate --ready-file");
+            }
+            let Some(path) = args.next() else {
+                return usage("missing path after --ready-file");
+            };
+            ready_path = Some(PathBuf::from(path));
+        } else {
+            return usage(&format!(
+                "unknown argument `{}`",
+                argument.to_string_lossy()
+            ));
+        }
     }
 
     let process_id = match parent_process_id.to_string_lossy().parse::<u32>() {
@@ -28,7 +48,10 @@ fn main() -> ExitCode {
         Err(error) => return usage(&format!("invalid parent process id: {error}")),
     };
 
-    let options = uv_windows::UpdateFinalizeOptions { fail_after_backup };
+    let options = uv_windows::UpdateFinalizeOptions {
+        fail_after_backup,
+        ready_path,
+    };
     match uv_windows::finalize_update_after_process_exit(
         process_id,
         &PathBuf::from(canonical),
@@ -51,7 +74,7 @@ fn main() -> ExitCode {
 
 fn usage(message: &str) -> ExitCode {
     eprintln!(
-        "{message}\nusage: fieldwork_deferred_update_finalizer <parent-pid> <canonical> <replacement> [--fail-after-backup]"
+        "{message}\nusage: fieldwork_deferred_update_finalizer <parent-pid> <canonical> <replacement> [--ready-file <path>] [--fail-after-backup]"
     );
     ExitCode::from(2)
 }
