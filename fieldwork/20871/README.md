@@ -1,4 +1,4 @@
-# Fieldwork: uvx and ambient Python import paths
+# Fieldwork: uvx project-dependency report — negative result
 
 Upstream issue: https://github.com/astral-sh/uv/issues/20871  
 Inspected upstream source: `79bbface771210df216b738e9bdc7df95e5a9e6b`  
@@ -7,39 +7,29 @@ External contact: **not authorized and not performed**
 
 ## In simple words
 
-Current `uvx` code does not discover or reuse the surrounding project's virtual environment. It selects a system interpreter, resolves the tool into an installed-tool or cached tool environment, and prepends that environment's scripts directory to `PATH`.
+The reported defect was not in uv. The reporter reduced the problem and found that their own tool invoked `uv run` internally, so its behavior legitimately depended on the launch directory and discovered project.
 
-The child process otherwise inherits the ambient environment. In particular, `PYTHONPATH` is not removed and Python isolation variables are not added. That makes an externally injected import path the leading explanation for a tool importing a project copy of a dependency. This matches the maintainer's unanswered question about `PYTHONPATH` and the executable in use.
+Our source review independently found that `uvx` itself selects a system interpreter and an installed-tool or cached tool environment; it does not reuse the surrounding project's `.venv`. The pending ambient-import-path probe is therefore no longer a prerequisite for this report and has been retired.
 
-## What is known
+## Upstream resolution
+
+The issue was closed as completed on 2026-08-02. The reporter stated that uv was not the culprit and identified the internal `uv run` invocation in their tool as the cause. The maintainer acknowledged the follow-up.
+
+## Retained source findings
 
 - tool interpreter discovery uses `EnvironmentPreference::OnlySystem`;
 - non-isolated reuse is limited to uv's installed-tools store, not the current project `.venv`;
 - fresh execution uses `CachedEnvironment::from_spec`;
-- `--isolated` disables installed-tool reuse but does not sanitize the child environment;
-- the child inherits the current working directory and all environment variables except the explicitly replaced `PATH` and any values from `--env-file`.
+- the launched command receives a `PATH` beginning with the tool environment's scripts directory;
+- ambient environment variables remain inherited, but that was not the cause established by the reporter;
+- uv's global `--isolated` option is documented as disabling configuration discovery and is deprecated in favor of `--no-config`; it is not a promise to scrub Python import variables.
 
-## Discriminating matrix
+## Artifacts
 
-Run `probe.sh` and record all four rows:
+The local path-package probe remains under `fieldwork/20871/` as a reusable diagnostic for ambient `PYTHONPATH` questions. It is retained but not presented as executed evidence for this issue.
 
-1. no ambient `PYTHONPATH`;
-2. `PYTHONPATH` points at a conflicting module;
-3. same conflict with `uvx --isolated`;
-4. same conflict after manually unsetting `PYTHONPATH` and setting `PYTHONNOUSERSITE=1`.
+## Disposition
 
-The probe uses only local path packages and does not need PyPI.
+**Negative result — stop.** No production source change is justified, no upstream proposal should be prepared, and this fork draft should remain closed unless a new clean reproduction shows a distinct uv defect.
 
-## Decision gate
-
-- If contamination occurs only with `PYTHONPATH`, classify the report as ambient-environment behavior. A product change would require an explicit policy decision about whether `uvx` should sanitize Python variables by default or only under `--isolated`.
-- If contamination occurs with `PYTHONPATH` absent, capture `sys.executable`, `sys.prefix`, `sys.path`, entry-point shebang, cache key, and current directory before touching production code.
-- Do not clear `PYTHONPATH` unconditionally without checking documented uv behavior and workflows that intentionally use it.
-
-## Candidate policy, not yet selected
-
-The least surprising bounded change would be to make `--isolated` remove `PYTHONPATH` and `PYTHONHOME`, set `PYTHONNOUSERSITE=1`, and document the behavior. Extending that to default `uvx` is a separate compatibility choice.
-
-## Evidence state
-
-`source-reviewed`; `reproducer-prepared`; not executed in this environment. No production patch is promoted until the matrix distinguishes ambient injection from an actual environment-selection defect.
+Evidence state: `source-reviewed`; `public-record verified`; probe `prepared but not executed`; no upstream contact.
