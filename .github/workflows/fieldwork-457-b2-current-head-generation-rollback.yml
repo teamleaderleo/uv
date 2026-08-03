@@ -1,0 +1,110 @@
+name: Fieldwork 457 B2 current-head generation rollback
+
+on:
+  pull_request:
+    paths:
+      - .github/fieldwork/457-b2/inject_generation_rollback.py
+      - .github/workflows/fieldwork-457-b2-current-head-generation-rollback.yml
+
+permissions:
+  contents: read
+
+jobs:
+  generation-rollback:
+    name: Windows ordinary-error generation rollback
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CANDIDATE_HEAD: 8d9324af47e1b52ec1f57f9232bd408281282cf5
+      CI: 1
+    steps:
+      - name: Check out exact experiment
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact base and experiment fence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git merge-base HEAD $env:CANDIDATE_HEAD) -ne $env:CANDIDATE_HEAD) {
+            throw 'Experiment does not descend from exact current public candidate'
+          }
+          $expected = @(
+            '.github/fieldwork/457-b2/inject_generation_rollback.py'
+            '.github/workflows/fieldwork-457-b2-current-head-generation-rollback.yml'
+          ) | Sort-Object
+          $changed = @(git diff --name-only "$env:CANDIDATE_HEAD..HEAD") | Sort-Object
+          if (Compare-Object $expected $changed) {
+            throw "Unexpected experiment diff. Expected: $($expected -join ', '); actual: $($changed -join ', ')"
+          }
+          git diff --check "$env:CANDIDATE_HEAD..HEAD"
+          New-Item -ItemType Directory -Force -Path receipt | Out-Null
+          @(
+            "experiment_head=$(git rev-parse HEAD)"
+            "candidate_head=$env:CANDIDATE_HEAD"
+            "runner=$env:RUNNER_OS"
+          ) | Set-Content receipt/identity.txt
+          rustc --version | Tee-Object -FilePath receipt/rust-version.txt
+          cargo --version | Tee-Object -FilePath receipt/cargo-version.txt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          shared-key: fieldwork-457-b2-current-head-generation-rollback
+          cache-on-failure: true
+
+      - name: Apply and lint proposed source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python .github/fieldwork/457-b2/inject_generation_rollback.py
+          rustup component add rustfmt
+          cargo fmt --all --check 2>&1 | Tee-Object -FilePath receipt/fmt.log
+          git diff --check
+          git diff -- crates/uv/src/commands/self_update.rs | Set-Content receipt/proposed-source.diff
+
+      - name: Run hostile rollback matrix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo test -p uv --lib --features self-update fieldwork_current_head_generation_rollback -- --nocapture 2>&1 |
+            Tee-Object -FilePath receipt/test.log
+
+      - name: Check affected targets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo check -p uv --all-targets --features self-update 2>&1 |
+            Tee-Object -FilePath receipt/check.log
+
+      - name: Record experiment contract
+        if: always()
+        shell: pwsh
+        run: |
+          @{
+            experimentHead = (git rev-parse HEAD)
+            candidateHead = $env:CANDIDATE_HEAD
+            platform = 'windows-latest'
+            proposedGuarantee = 'every ordinary companion, receipt, or final-executable error restores the pre-update live generation'
+            controls = @(
+              'destructive finalizer error restores old uv, companions, receipt, and removes newly introduced files'
+              'mid-companion-copy error restores prior companion state before receipt or finalizer'
+              'success commits uv, companions, and receipt as the new generation'
+            )
+            excludedGuarantees = @(
+              'power loss or process termination during rollback'
+              'atomic multi-file visibility to concurrent observers'
+              'custom or GHE axoupdater route'
+            )
+          } | ConvertTo-Json -Depth 4 | Set-Content receipt/contract.json
+
+      - name: Upload exact receipt
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: fieldwork-457-b2-current-head-generation-rollback
+          path: receipt/
+          if-no-files-found: error
+          retention-days: 30
