@@ -1,0 +1,11 @@
+diff --git a/crates/uv-resolver/src/lock/mod.rs b/crates/uv-resolver/src/lock/mod.rs
+--- a/crates/uv-resolver/src/lock/mod.rs
++++ b/crates/uv-resolver/src/lock/mod.rs
+@@ -2920,7 +2920,7 @@ impl Package {
+                             relative_metadata_requirement(requirement, root, relative_sources)
+                         })
+-                        .collect::<Result<_, _>>()?
++                        .collect::<Result<_, _>>()?;
+                     Ok::<_, LockError>((group.clone(), requirements))
+                 })
+                 .collect::<Result<_, _>>()?
