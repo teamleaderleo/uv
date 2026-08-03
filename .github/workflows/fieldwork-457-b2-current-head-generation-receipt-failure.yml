@@ -1,0 +1,287 @@
+name: Fieldwork 457 B2 current-head generation and receipt failure
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/fieldwork-457-b2-current-head-generation-receipt-failure.yml
+
+permissions:
+  contents: read
+
+jobs:
+  current-head-failure:
+    name: Windows current-head mixed generation and receipt
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CANDIDATE_HEAD: 8d9324af47e1b52ec1f57f9232bd408281282cf5
+      CI: 1
+    steps:
+      - name: Check out exact execution carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact candidate and carrier fence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git merge-base HEAD $env:CANDIDATE_HEAD) -ne $env:CANDIDATE_HEAD) {
+            throw 'Carrier does not descend from exact current public candidate head'
+          }
+          $changed = @(git diff --name-only "$env:CANDIDATE_HEAD..HEAD")
+          if ($changed.Count -ne 1 -or $changed[0] -ne '.github/workflows/fieldwork-457-b2-current-head-generation-receipt-failure.yml') {
+            throw "Unexpected carrier diff: $($changed -join ', ')"
+          }
+          git diff --check "$env:CANDIDATE_HEAD..HEAD"
+          New-Item -ItemType Directory -Force -Path receipt | Out-Null
+          @(
+            "carrier_head=$(git rev-parse HEAD)"
+            "candidate_head=$env:CANDIDATE_HEAD"
+            "runner=$env:RUNNER_OS"
+          ) | Set-Content receipt/identity.txt
+          rustc --version | Tee-Object -FilePath receipt/rust-version.txt
+          cargo --version | Tee-Object -FilePath receipt/cargo-version.txt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          shared-key: fieldwork-457-b2-current-head-generation-receipt-failure
+          cache-on-failure: true
+
+      - name: Inject explicit finalizer seam and current-head control
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          from pathlib import Path
+
+          path = Path("crates/uv/src/commands/self_update.rs")
+          text = path.read_text(encoding="utf-8")
+
+          old = r'''#[cfg(windows)]
+          fn replace_from_temporary_install(
+              temporary_install_dir: &Path,
+              temporary_config_dir: &Path,
+              receipt_path: &Path,
+              install_prefix: &Path,
+              modify_path: bool,
+          ) -> Result<()> {
+              let current_executable = std::env::current_exe()?;
+              let current_file_name = current_executable.file_name().ok_or_else(|| {
+                  std::io::Error::new(
+                      std::io::ErrorKind::InvalidInput,
+                      "Current executable has no file name",
+                  )
+              })?;
+              let install_dir = current_executable.parent().ok_or_else(|| {
+                  std::io::Error::new(
+                      std::io::ErrorKind::InvalidInput,
+                      "Current executable has no parent directory",
+                  )
+              })?;
+
+              for entry in fs_err::read_dir(temporary_install_dir)? {
+                  let entry = entry?;
+                  if entry.file_name() == current_file_name {
+                      continue;
+                  }
+                  fs_err::copy(entry.path(), install_dir.join(entry.file_name()))?;
+              }
+
+              update_standalone_install_receipt(
+                  temporary_config_dir,
+                  receipt_path,
+                  install_prefix,
+                  modify_path,
+              )?;
+
+              self_replace::self_replace(temporary_install_dir.join(current_file_name))
+                  .context("Failed to replace the current executable")?;
+              Ok(())
+          }
+          '''
+
+          new = r'''#[cfg(windows)]
+          fn replace_from_temporary_install(
+              temporary_install_dir: &Path,
+              temporary_config_dir: &Path,
+              receipt_path: &Path,
+              install_prefix: &Path,
+              modify_path: bool,
+          ) -> Result<()> {
+              let current_executable = std::env::current_exe()?;
+              replace_from_temporary_install_with(
+                  temporary_install_dir,
+                  temporary_config_dir,
+                  receipt_path,
+                  install_prefix,
+                  modify_path,
+                  &current_executable,
+                  |replacement| {
+                      self_replace::self_replace(replacement)
+                          .context("Failed to replace the current executable")?;
+                      Ok(())
+                  },
+              )
+          }
+
+          #[cfg(windows)]
+          fn replace_from_temporary_install_with<F>(
+              temporary_install_dir: &Path,
+              temporary_config_dir: &Path,
+              receipt_path: &Path,
+              install_prefix: &Path,
+              modify_path: bool,
+              current_executable: &Path,
+              finalize_current_executable: F,
+          ) -> Result<()>
+          where
+              F: FnOnce(&Path) -> Result<()>,
+          {
+              let current_file_name = current_executable.file_name().ok_or_else(|| {
+                  std::io::Error::new(
+                      std::io::ErrorKind::InvalidInput,
+                      "Current executable has no file name",
+                  )
+              })?;
+              let install_dir = current_executable.parent().ok_or_else(|| {
+                  std::io::Error::new(
+                      std::io::ErrorKind::InvalidInput,
+                      "Current executable has no parent directory",
+                  )
+              })?;
+
+              for entry in fs_err::read_dir(temporary_install_dir)? {
+                  let entry = entry?;
+                  if entry.file_name() == current_file_name {
+                      continue;
+                  }
+                  fs_err::copy(entry.path(), install_dir.join(entry.file_name()))?;
+              }
+
+              update_standalone_install_receipt(
+                  temporary_config_dir,
+                  receipt_path,
+                  install_prefix,
+                  modify_path,
+              )?;
+
+              finalize_current_executable(&temporary_install_dir.join(current_file_name))?;
+              Ok(())
+          }
+          '''
+
+          if old not in text:
+              raise SystemExit("exact current-head replacement helper not found")
+          text = text.replace(old, new, 1)
+
+          test = r'''
+
+              #[cfg(windows)]
+              #[test]
+              fn fieldwork_current_head_finalizer_failure_leaves_new_companion_and_receipt() {
+                  let temp_dir = TempDir::new().unwrap();
+                  let staged_dir = temp_dir.path().join("staged");
+                  let live_dir = temp_dir.path().join("live");
+                  let staged_config_dir = temp_dir.path().join("staged-config");
+                  let staged_receipt_dir = staged_config_dir.join("uv");
+                  let receipt_path = temp_dir.path().join("live-uv-receipt.json");
+                  fs_err::create_dir_all(&staged_dir).unwrap();
+                  fs_err::create_dir_all(&live_dir).unwrap();
+                  fs_err::create_dir_all(&staged_receipt_dir).unwrap();
+
+                  let live_uv = live_dir.join("uv.exe");
+                  let live_uvx = live_dir.join("uvx.exe");
+                  fs_err::write(&live_uv, b"old-uv").unwrap();
+                  fs_err::write(&live_uvx, b"old-uvx").unwrap();
+                  fs_err::write(staged_dir.join("uv.exe"), b"new-uv").unwrap();
+                  fs_err::write(staged_dir.join("uvx.exe"), b"new-uvx").unwrap();
+                  fs_err::write(
+                      staged_receipt_dir.join("uv-receipt.json"),
+                      serde_json::to_vec(&serde_json::json!({
+                          "binaries": ["uv", "uvx"],
+                          "install_prefix": staged_dir,
+                          "modify_path": false,
+                          "version": "0.12.1"
+                      }))
+                      .unwrap(),
+                  )
+                  .unwrap();
+                  fs_err::write(
+                      &receipt_path,
+                      serde_json::to_vec(&serde_json::json!({
+                          "binaries": ["uv", "uvx"],
+                          "install_prefix": live_dir,
+                          "modify_path": true,
+                          "version": "0.12.0"
+                      }))
+                      .unwrap(),
+                  )
+                  .unwrap();
+
+                  let error = replace_from_temporary_install_with(
+                      &staged_dir,
+                      &staged_config_dir,
+                      &receipt_path,
+                      &live_dir,
+                      true,
+                      &live_uv,
+                      |_| anyhow::bail!("injected finalizer failure"),
+                  )
+                  .expect_err("finalizer should fail after companion and receipt commit");
+
+                  assert!(error.to_string().contains("injected finalizer failure"));
+                  assert_eq!(fs_err::read(&live_uv).unwrap(), b"old-uv");
+                  assert_eq!(fs_err::read(&live_uvx).unwrap(), b"new-uvx");
+                  let receipt: Value =
+                      serde_json::from_slice(&fs_err::read(&receipt_path).unwrap()).unwrap();
+                  assert_eq!(receipt["version"], Value::String("0.12.1".to_string()));
+                  assert_eq!(receipt["modify_path"], Value::Bool(true));
+                  assert_eq!(
+                      receipt["install_prefix"],
+                      Value::String(live_dir.display().to_string())
+                  );
+              }
+          '''
+
+          index = text.rfind("\n}")
+          if index < 0:
+              raise SystemExit("test module close not found")
+          path.write_text(text[:index] + test + text[index:], encoding="utf-8")
+          '@ | Set-Content -LiteralPath inject_fieldwork_control.py -Encoding utf8
+
+          python inject_fieldwork_control.py
+          rustup component add rustfmt
+          cargo fmt --all
+          git diff --check
+          git diff -- crates/uv/src/commands/self_update.rs | Set-Content receipt/injected-source.diff
+
+      - name: Run exact current-head control
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo test -p uv --lib --features self-update fieldwork_current_head_finalizer_failure_leaves_new_companion_and_receipt -- --nocapture 2>&1 |
+            Tee-Object -FilePath receipt/test.log
+
+      - name: Record result
+        if: always()
+        shell: pwsh
+        run: |
+          @{
+            carrierHead = (git rev-parse HEAD)
+            candidateHead = $env:CANDIDATE_HEAD
+            platform = 'windows-latest'
+            injectedFailure = 'final uv executable finalizer returns error after companion copies and live receipt promotion'
+            expectedObservation = 'live uv remains old; live uvx and receipt describe new generation'
+          } | ConvertTo-Json | Set-Content receipt/receipt.json
+
+      - name: Upload exact receipt
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: fieldwork-457-b2-current-head-generation-receipt-failure
+          path: receipt/
+          if-no-files-found: error
+          retention-days: 30
