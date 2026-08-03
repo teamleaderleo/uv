@@ -1,0 +1,272 @@
+diff --git a/crates/uv-resolver/src/lock/mod.rs b/crates/uv-resolver/src/lock/mod.rs
+index 02f0794e184..f31ceed3edf 100644
+--- a/crates/uv-resolver/src/lock/mod.rs
++++ b/crates/uv-resolver/src/lock/mod.rs
+@@ -30,8 +30,8 @@ use uv_distribution_types::{
+     Dist, FileLocation, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist, Identifier,
+     IndexLocations, IndexMetadata, IndexUrl, Name, PYPI_URL, PathBuiltDist, PathSourceDist,
+     RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource, Requirement,
+-    RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree, StaticMetadata,
+-    ToUrlError, UrlString,
++    RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
++    SourceDist as DistributionSourceDist, StaticMetadata, ToUrlError, UrlString,
+ };
+ use uv_fs::{
+     PortablePath, PortablePathBuf, Simplified, normalize_path, relative_to, try_relative_to_if,
+@@ -440,6 +440,23 @@ impl Lock {
+             }
+         }
+ 
++        // Keep metadata paths relative when the selected distribution was requested with a
++        // relative path. Build backends can emit an absolute `file://` URL for the same source.
++        let relative_sources = resolution
++            .base_dists()
++            .filter_map(|(_, dist)| match &dist.dist {
++                ResolvedDist::Installable { dist, .. } => match dist.as_ref() {
++                    Dist::Source(DistributionSourceDist::Directory(directory))
++                        if !directory.url.was_given_absolute() =>
++                    {
++                        Some((&directory.name, directory.install_path.as_ref()))
++                    }
++                    _ => None,
++                },
++                ResolvedDist::Installed { .. } => None,
++            })
++            .collect::<FxHashSet<_>>();
++
+         // Lock all base packages.
+         for (node_index, dist) in resolution.base_dists() {
+             // If there are multiple distributions for the same package, include the markers of all
+@@ -459,8 +476,13 @@ impl Lock {
+                 vec![]
+             };
+ 
+-            let mut package =
+-                Package::from_annotated_dist(dist, fork_markers, root, index_locations)?;
++            let mut package = Package::from_annotated_dist(
++                dist,
++                fork_markers,
++                root,
++                index_locations,
++                &relative_sources,
++            )?;
+             let mut wheel_marker = dist.marker;
+             if let Some(supported_environments_marker) = supported_environments_marker {
+                 wheel_marker.and(supported_environments_marker);
+@@ -2855,6 +2877,7 @@ impl Package {
+         fork_markers: Vec<UniversalMarker>,
+         root: &Path,
+         index_locations: &IndexLocations,
++        relative_sources: &FxHashSet<(&PackageName, &Path)>,
+     ) -> Result<Self, LockError> {
+         let id = PackageId::from_annotated_dist(annotated_dist, root)?;
+         let sdist = SourceDist::from_annotated_dist(&id, annotated_dist, index_locations)?;
+@@ -2869,9 +2892,10 @@ impl Package {
+                 .requires_dist
+                 .iter()
+                 .cloned()
+-                .map(|requirement| requirement.relative_to(root))
+-                .collect::<Result<_, _>>()
+-                .map_err(LockErrorKind::RequirementRelativePath)?
++                .map(|requirement| {
++                    relative_metadata_requirement(requirement, root, relative_sources)
++                })
++                .collect::<Result<_, _>>()?
+         };
+         let provides_extra = if id.source.is_immutable() {
+             Box::default()
+@@ -2896,9 +2920,10 @@ impl Package {
+                     let requirements = requirements
+                         .iter()
+                         .cloned()
+-                        .map(|requirement| requirement.relative_to(root))
+-                        .collect::<Result<_, _>>()
+-                        .map_err(LockErrorKind::RequirementRelativePath)?;
++                        .map(|requirement| {
++                            relative_metadata_requirement(requirement, root, relative_sources)
++                        })
++                        .collect::<Result<_, _>>()?;
+                     Ok::<_, LockError>((group.clone(), requirements))
+                 })
+                 .collect::<Result<_, _>>()?
+@@ -3668,6 +3693,28 @@ impl Package {
+     }
+ }
+ 
++/// Relativize a metadata requirement against the lock root, preserving the selected source's
++/// original relative-path intent when a build backend emitted an absolute file URL.
++fn relative_metadata_requirement(
++    mut requirement: Requirement,
++    root: &Path,
++    relative_sources: &FxHashSet<(&PackageName, &Path)>,
++) -> Result<Requirement, LockError> {
++    if let RequirementSource::Directory {
++        install_path, url, ..
++    } = &mut requirement.source
++        && relative_sources.contains(&(&requirement.name, install_path.as_ref()))
++    {
++        *url = VerbatimUrl::from_normalized_path(install_path.as_ref())
++            .map_err(LockErrorKind::RequirementVerbatimUrl)?;
++    }
++
++    requirement
++        .relative_to(root)
++        .map_err(LockErrorKind::RequirementRelativePath)
++        .map_err(LockError::from)
++}
++
+ /// Attempts to construct a `VerbatimUrl` from the given normalized `Path`.
+ fn verbatim_url(path: &Path, id: &PackageId) -> Result<VerbatimUrl, LockError> {
+     let url =
+diff --git a/crates/uv-resolver/src/resolver/urls.rs b/crates/uv-resolver/src/resolver/urls.rs
+index 15aad83055d..fa59b96d6c5 100644
+--- a/crates/uv-resolver/src/resolver/urls.rs
++++ b/crates/uv-resolver/src/resolver/urls.rs
+@@ -55,19 +55,16 @@ impl Urls {
+                 .find(|package_url| same_resource(&package_url.parsed_url, &url.parsed_url, git))
+             {
+                 // Allow editables to override non-editables.
+-                let previous_editable = package_url.is_editable();
+-                *package_url = url;
+-                if previous_editable {
+-                    if let VerbatimParsedUrl {
++                if package_url.is_editable()
++                    && let VerbatimParsedUrl {
+                         parsed_url: ParsedUrl::Directory(ParsedDirectoryUrl { editable, .. }),
+                         verbatim: _,
+-                    } = package_url
+-                    {
+-                        if editable.is_none() {
+-                            debug!("Allowing an editable variant of {}", &package_url.verbatim);
+-                            *editable = Some(true);
+-                        }
+-                    }
++                    } = &url
++                    && editable.is_none()
++                {
++                    debug!("Allowing an editable variant of {}", &package_url.verbatim);
++                } else {
++                    *package_url = url;
+                 }
+             } else {
+                 package_urls.push(url);
+diff --git a/crates/uv/tests/lock/lock.rs b/crates/uv/tests/lock/lock.rs
+index 1ebb2eff4e9..2966d9ae0e8 100644
+--- a/crates/uv/tests/lock/lock.rs
++++ b/crates/uv/tests/lock/lock.rs
+@@ -8671,6 +8671,115 @@ fn lock_relative_and_absolute_paths() -> Result<()> {
+     Ok(())
+ }
+ 
++/// Preserve a relative editable source when it is also requested transitively by Poetry.
++///
++/// See: <https://github.com/astral-sh/uv/issues/20477>
++#[test]
++fn lock_editable_transitive_poetry_path() -> Result<()> {
++    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-07-10T00:00:00Z");
++
++    let project = context.temp_dir.child("project");
++    project.child("pyproject.toml").write_str(indoc! {r#"
++        [project]
++        name = "project"
++        version = "0.1.0"
++        requires-python = ">=3.12"
++        dependencies = ["parent", "child"]
++
++        [tool.uv.sources]
++        parent = { path = "../parent", editable = true }
++        child = { path = "../child", editable = true }
++    "#})?;
++
++    let parent = context.temp_dir.child("parent");
++    parent.child("parent/__init__.py").touch()?;
++    parent.child("pyproject.toml").write_str(indoc! {r#"
++        [tool.poetry]
++        name = "parent"
++        version = "0.1.0"
++        description = ""
++        packages = [{ include = "parent" }]
++
++        [tool.poetry.dependencies]
++        python = ">=3.12,<3.13"
++        child = { path = "../child", develop = true }
++
++        [build-system]
++        requires = ["poetry-core"]
++        build-backend = "poetry.core.masonry.api"
++    "#})?;
++
++    let child = context.temp_dir.child("child");
++    child.child("child/__init__.py").touch()?;
++    child.child("pyproject.toml").write_str(indoc! {r#"
++        [project]
++        name = "child"
++        version = "0.1.0"
++        requires-python = ">=3.12"
++
++        [build-system]
++        requires = ["hatchling"]
++        build-backend = "hatchling.build"
++    "#})?;
++
++    uv_snapshot!(context.filters(), context.lock().current_dir(project.path()), @"
++    success: true
++    exit_code: 0
++    ----- stdout -----
++
++    ----- stderr -----
++    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
++    Resolved 3 packages in [TIME]
++    ");
++
++    let lock = fs_err::read_to_string(project.join("uv.lock"))?;
++    insta::with_settings!({
++        filters => context.filters(),
++    }, {
++        assert_snapshot!(lock, @r#"
++        version = 1
++        revision = 3
++        requires-python = ">=3.12"
++
++        [options]
++        exclude-newer = "2026-07-10T00:00:00Z"
++
++        [[package]]
++        name = "child"
++        version = "0.1.0"
++        source = { editable = "../child" }
++
++        [[package]]
++        name = "parent"
++        version = "0.1.0"
++        source = { editable = "../parent" }
++        dependencies = [
++            { name = "child" },
++        ]
++
++        [package.metadata]
++        requires-dist = [{ name = "child", directory = "../child" }]
++
++        [[package]]
++        name = "project"
++        version = "0.1.0"
++        source = { virtual = "." }
++        dependencies = [
++            { name = "child" },
++            { name = "parent" },
++        ]
++
++        [package.metadata]
++        requires-dist = [
++            { name = "child", editable = "../child" },
++            { name = "parent", editable = "../parent" },
++        ]
++        "#);
++    });
++
++    Ok(())
++}
++
+ /// Check PEP 508 URL handling when they contain variables
+ #[cfg(feature = "test-universal")]
+ #[test]
