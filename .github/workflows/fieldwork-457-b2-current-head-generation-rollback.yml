@@ -57,6 +57,7 @@ jobs:
           cargo fmt --all --check 2>&1 | tee receipt-cross/fmt.log
           git diff --check
           git diff -- crates/uv/src/commands/self_update.rs > receipt-cross/proposed-source.diff
+          cp crates/uv/src/commands/self_update.rs receipt-cross/generated-self-update.rs
           cargo check -p uv --all-targets --features self-update --target x86_64-pc-windows-msvc 2>&1 |
             tee receipt-cross/check.log
 
@@ -125,6 +126,7 @@ jobs:
           cargo fmt --all --check 2>&1 | Tee-Object -FilePath receipt/fmt.log
           git diff --check
           git diff -- crates/uv/src/commands/self_update.rs | Set-Content receipt/proposed-source.diff
+          Copy-Item crates/uv/src/commands/self_update.rs receipt/generated-self-update.rs
 
       - name: Run hostile rollback matrix
         shell: pwsh
