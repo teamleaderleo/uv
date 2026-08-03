@@ -146,17 +146,15 @@ fn remove_if_exists(path: &Path) -> io::Result<()> {
     }
 }
 
+#[allow(unsafe_code)]
 fn open_process_for_wait(process_id: u32) -> io::Result<OwnedHandle> {
-    #[allow(unsafe_code)]
     let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, process_id) }
         .map_err(|error| io::Error::other(error.to_string()))?;
-
-    #[allow(unsafe_code)]
     Ok(unsafe { OwnedHandle::from_raw_handle(handle.0) })
 }
 
+#[allow(unsafe_code)]
 fn wait_for_process_exit(handle: &OwnedHandle, process_id: u32) -> io::Result<()> {
-    #[allow(unsafe_code)]
     let wait_result = unsafe { WaitForSingleObject(HANDLE(handle.as_raw_handle()), INFINITE) };
     if wait_result != WAIT_OBJECT_0 {
         return Err(io::Error::other(format!(
