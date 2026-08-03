@@ -1,0 +1,146 @@
+name: Fieldwork 457 B2 strict installer process tree
+
+on:
+  pull_request:
+    paths:
+      - .github/fieldwork/457-b2/inject_strict_installer_job.py
+      - .github/workflows/fieldwork-457-b2-official-installer-job.yml
+      - crates/uv-windows/src/job.rs
+
+permissions:
+  contents: read
+
+env:
+  JOB_EXPERIMENT_BASE: 6098dab64d959f9cf40fb44bbd8d4849c3aa9239
+  PUBLIC_CANDIDATE: 77e107dd2665f660c461998bc83174bf26ee7cf6
+  CI: 1
+
+jobs:
+  cross-check:
+    name: Cross-check injected Windows source
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out exact stacked experiment
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git merge-base HEAD "$JOB_EXPERIMENT_BASE")" = "$JOB_EXPERIMENT_BASE"
+          test "$(git merge-base HEAD "$PUBLIC_CANDIDATE")" = "$PUBLIC_CANDIDATE"
+          expected=$(printf '%s\n' \
+            .github/fieldwork/457-b2/inject_strict_installer_job.py \
+            .github/workflows/fieldwork-457-b2-official-installer-job.yml \
+            crates/uv-windows/src/job.rs | sort)
+          actual=$(git diff --name-only "$JOB_EXPERIMENT_BASE..HEAD" | sort)
+          test "$actual" = "$expected"
+          git diff --check "$JOB_EXPERIMENT_BASE..HEAD"
+
+      - name: Install Windows Rust target and formatter
+        shell: bash
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          rustup component add rustfmt
+
+      - name: Apply and cross-check proposed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/fieldwork/457-b2/inject_strict_installer_job.py
+          cargo fmt --all
+          git diff --check
+          cargo check -p uv-windows --no-default-features --target x86_64-pc-windows-msvc
+          cargo check -p uv --all-targets --features self-update --target x86_64-pc-windows-msvc
+
+  strict-installer-tree:
+    name: Windows official installer strict Job Object
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out exact stacked experiment
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact base and file fence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git merge-base HEAD $env:JOB_EXPERIMENT_BASE) -ne $env:JOB_EXPERIMENT_BASE) {
+            throw 'Installer integration does not descend from exact Job policy experiment'
+          }
+          $expected = @(
+            '.github/fieldwork/457-b2/inject_strict_installer_job.py'
+            '.github/workflows/fieldwork-457-b2-official-installer-job.yml'
+            'crates/uv-windows/src/job.rs'
+          ) | Sort-Object
+          $changed = @(git diff --name-only "$env:JOB_EXPERIMENT_BASE..HEAD") | Sort-Object
+          if (Compare-Object $expected $changed) {
+            throw "Unexpected stacked diff. Expected: $($expected -join ', '); actual: $($changed -join ', ')"
+          }
+          if ((git merge-base HEAD $env:PUBLIC_CANDIDATE) -ne $env:PUBLIC_CANDIDATE) {
+            throw 'Stack no longer descends from exact public candidate'
+          }
+          git diff --check "$env:JOB_EXPERIMENT_BASE..HEAD"
+          New-Item -ItemType Directory -Force -Path receipt | Out-Null
+          @(
+            "integration_head=$(git rev-parse HEAD)"
+            "job_experiment_base=$env:JOB_EXPERIMENT_BASE"
+            "public_candidate=$env:PUBLIC_CANDIDATE"
+            "runner=$env:RUNNER_OS"
+          ) | Set-Content receipt/identity.txt
+          rustc --version | Tee-Object -FilePath receipt/rust-version.txt
+          cargo --version | Tee-Object -FilePath receipt/cargo-version.txt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          shared-key: fieldwork-457-b2-official-installer-job
+          cache-on-failure: true
+
+      - name: Apply strict Job integration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          rustup component add rustfmt
+          python .github/fieldwork/457-b2/inject_strict_installer_job.py
+          cargo fmt --all
+          git diff --check
+          git diff -- crates/uv/src/commands/self_update.rs crates/uv-windows/src/job.rs |
+            Set-Content receipt/injected-source.diff
+
+      - name: Run strict installer descendant cancellation control
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo test -p uv --lib --features self-update fieldwork_strict_installer_job_terminates_spawned_descendant_on_cancellation -- --nocapture 2>&1 |
+            Tee-Object -FilePath receipt/test.log
+
+      - name: Record exact experiment
+        if: always()
+        shell: pwsh
+        run: |
+          @{
+            integrationHead = (git rev-parse HEAD)
+            publicCandidate = $env:PUBLIC_CANDIDATE
+            jobPolicyBase = $env:JOB_EXPERIMENT_BASE
+            platform = 'windows-latest'
+            assignmentBoundary = 'release descendant only after strict Job assignment callback'
+            cancellationBoundary = 'abort updater future; Job and direct child drop together'
+            expectedObservation = 'spawned PowerShell descendant cannot write delayed survival marker'
+          } | ConvertTo-Json | Set-Content receipt/receipt.json
+
+      - name: Upload exact receipt
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: fieldwork-457-b2-official-installer-job
+          path: receipt/
+          if-no-files-found: error
+          retention-days: 30
