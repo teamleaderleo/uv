@@ -14,4 +14,22 @@ for old, new in replacements.items():
         raise SystemExit(f"expected exactly one occurrence of {old!r}, found {count}")
     text = text.replace(old, new, 1)
 
+mid_copy_start = text.index(
+    "fn fieldwork_current_head_generation_rollback_restores_mid_copy_failure()"
+)
+mid_copy_end = text.index(
+    "fn fieldwork_current_head_generation_rollback_commits_successful_generation()",
+    mid_copy_start,
+)
+mid_copy = text[mid_copy_start:mid_copy_end]
+for old, new in {
+    'let live_uvw = live_dir.join("uvw.exe");': 'let live_uvz = live_dir.join("uvz.exe");',
+    'assert!(!live_uvw.exists());': 'assert!(!live_uvz.exists());',
+}.items():
+    count = mid_copy.count(old)
+    if count != 1:
+        raise SystemExit(f"expected one mid-copy occurrence of {old!r}, found {count}")
+    mid_copy = mid_copy.replace(old, new, 1)
+
+text = text[:mid_copy_start] + mid_copy + text[mid_copy_end:]
 path.write_text(text, encoding="utf-8")
