@@ -69,3 +69,44 @@ Do not turn a plausible mechanism into a finding without execution. Do not conta
 ### Next smallest probe
 
 Apply exact draft `astral-sh/uv-dev#304@675839b0b1b1c66ee3b02139e1237094722ec2b2` to exact upstream base `79bbface771210df216b738e9bdc7df95e5a9e6b`, then rerun the existing editable/non-editable eight-observation matrix without changing the fixture. Stop and reassess before expanding scope if either package source or parent metadata remains absolute.
+
+## 2026-08-03 — Exact draft #304 validation launched
+
+### Question considered
+
+Does exact draft `uv-dev#304@675839b0b1b1c66ee3b02139e1237094722ec2b2` repair the full confirmed directory class, including the untested non-editable sibling and both lockfile locations?
+
+### Why this is the highest-value next probe
+
+The answer determines whether the active draft implements the broader provenance invariant or only repairs the reported editable collision. Every archive, alias, serializer, and platform probe becomes easier to interpret after this boundary is known.
+
+### Evidence and execution setup
+
+- Re-read `FINDINGS.md` and this log before selecting the probe.
+- Re-fetched draft #304 on 2026-08-03. It remains open, draft, one commit, head `675839b0b1b1c66ee3b02139e1237094722ec2b2`, with the same editable-only fixture and no comments.
+- The fork already contains `draft-304-production.patch`, an exact production-code extraction of that draft, plus `.github/workflows/fieldwork-draft-304.yml`.
+- The workflow applies the patch to exact upstream base `79bbface771210df216b738e9bdc7df95e5a9e6b`, builds `uv`, and runs the existing eight-observation fixture unchanged.
+- A second read-only-source workflow was added as an independent execution route, pinned to the same draft head. It avoids modifying or contacting Astral.
+- Direct local cloning was attempted and blocked by DNS resolution in the automation container. That environment failure says nothing about UV behavior; GitHub Actions remains the execution source of record.
+
+### Considered and declined
+
+- **Copy the entire draft repository state into the fork.** Declined because the exact production patch already exists and yields a smaller, auditable delta against the recorded base.
+- **Change the fixture while validating the draft.** Declined because unchanged inputs preserve comparability with the 0.10.0, 0.10.10, and 0.12.1 receipts.
+- **Begin archive or symlink testing during the same run.** Deferred because a remaining ordinary directory failure would dominate those narrower cases.
+- **Treat the draft source inspection as proof.** Declined. The implementation appears broad enough to cover relative directory sources, while its URL-selection branch remains tailored to editable precedence. Execution decides the result.
+
+### Result state
+
+Probe launched. Confirmed behavioral result remains pending until the patched-binary workflow produces receipts. No upstream contact occurred.
+
+### Still unconsidered
+
+- Whether the draft preserves an explicitly absolute root source when transitive metadata points to the same resource.
+- Whether exact-path matching in `relative_sources` survives symlink aliases or normalized path variants.
+- Whether a non-Poetry backend emits equivalent absolute metadata and crosses the same boundary.
+- Whether `pylock.toml` uses the repaired provenance or independently leaks the backend spelling.
+
+### Next smallest probe
+
+Read the patched-binary artifact and classify all eight observations. If editable and non-editable directory records both remain relative, move next to a symlink-alias fixture because `same_resource` accepts filesystem identity while draft metadata repair keys package name plus exact install path.
