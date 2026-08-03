@@ -12,7 +12,9 @@ use core::ffi::c_void;
 #[cfg(feature = "std")]
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+#[cfg(not(feature = "std"))]
+use windows::Win32::Foundation::CloseHandle;
+use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
@@ -97,6 +99,7 @@ impl Job {
         Self::new_with_silent_breakaway(false)
     }
 
+    #[allow(unsafe_code)]
     fn new_with_silent_breakaway(silent_breakaway: bool) -> Result<Self, JobError> {
         // SAFETY: CreateJobObjectW with None parameters creates unnamed job object.
         let handle =
@@ -129,6 +132,7 @@ impl Job {
 
     /// Assigns standard-library child process to this job object.
     #[cfg(feature = "std")]
+    #[allow(unsafe_code)]
     pub fn assign_child(&self, child: &std::process::Child) -> Result<(), JobError> {
         use std::os::windows::io::{AsHandle, AsRawHandle};
 
