@@ -54,6 +54,7 @@ jobs:
           python .github/fieldwork/457-b2/inject_strict_installer_job.py
           cargo fmt --all
           git diff --check
+          cargo check -p uv-windows --no-default-features --target x86_64-pc-windows-msvc
           cargo check -p uv --all-targets --features self-update --target x86_64-pc-windows-msvc
 
   strict-installer-tree:
