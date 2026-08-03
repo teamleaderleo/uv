@@ -45,6 +45,7 @@ jobs:
             fieldwork/wheel-cache-crash-consistency/repro_missing_http_archive.py \
             fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py \
             fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py \
             fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py
           git -C uv-current apply --check \
             ../fieldwork/wheel-cache-crash-consistency/missing-local-archive-candidate.patch
@@ -77,6 +78,7 @@ jobs:
             ../fieldwork/wheel-cache-crash-consistency/missing-local-archive-candidate.patch
           python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py uv-current
           python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py uv-current
           python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py uv-current
           git -C uv-current diff --check
           rustup component add rustfmt
@@ -86,6 +88,7 @@ jobs:
           test "$(cat fieldwork-wheel-cache-manifest-files.txt)" = "$(printf '%s\n' \
             crates/uv-distribution/src/archive.rs \
             crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-install-wheel/src/lib.rs \
             crates/uv-install-wheel/src/wheel.rs \
             crates/uv-installer/src/plan.rs)"
           git -C uv-current diff --binary \
@@ -160,6 +163,7 @@ jobs:
           git -C uv-current add -- \
             crates/uv-distribution/src/archive.rs \
             crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-install-wheel/src/lib.rs \
             crates/uv-install-wheel/src/wheel.rs \
             crates/uv-installer/src/plan.rs
           git -C uv-current diff --cached --check
