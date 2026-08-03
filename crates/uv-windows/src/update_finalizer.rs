@@ -4,7 +4,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-use windows::Win32::System::Threading::{INFINITE, OpenProcess, SYNCHRONIZE, WaitForSingleObject};
+use windows::Win32::System::Threading::{
+    INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+};
 
 /// Options used by the experimental deferred update finalizer.
 #[derive(Debug, Clone, Copy, Default)]
@@ -138,7 +140,7 @@ fn remove_if_exists(path: &Path) -> io::Result<()> {
 }
 
 fn wait_for_process_exit(process_id: u32) -> io::Result<()> {
-    let handle = unsafe { OpenProcess(SYNCHRONIZE, false, process_id) }
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, process_id) }
         .map_err(|error| io::Error::other(error.to_string()))?;
     let wait_result = unsafe { WaitForSingleObject(handle, INFINITE) };
     let close_result = unsafe { CloseHandle(handle) };
