@@ -82,6 +82,7 @@ jobs:
           python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py uv-current
           git -C uv-current diff --check
           rustup component add rustfmt
+          (cd uv-current && cargo fmt --all)
           (cd uv-current && cargo fmt --all -- --check)
           git -C uv-current diff --name-only \
             > fieldwork-wheel-cache-manifest-files.txt
