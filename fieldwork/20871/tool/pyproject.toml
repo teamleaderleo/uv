@@ -1,0 +1,16 @@
+[project]
+name = "fieldwork-uvx-probe"
+version = "1.0.0"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+fieldwork-uvx-probe = "fieldwork_uvx_probe:main"
+
+[build-system]
+requires = ["uv_build>=0.8,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = ["fieldwork_uvx_probe", "probe_dep"]
+module-root = ""
