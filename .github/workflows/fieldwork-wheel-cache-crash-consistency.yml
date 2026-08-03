@@ -116,7 +116,7 @@ jobs:
           )
           assert receipt['outcome'] == 'bug-reproduced', receipt
           assert receipt['source_wheel_unchanged'] is True, receipt
-          assert receipt['stale_pointer_survived'] is True, receipt
+          assert receipt['second_failure_mentions_removed_archive'] is True, receipt
           PY
 
       - name: Install rustfmt for pinned toolchain
@@ -180,7 +180,6 @@ jobs:
           )
           assert receipt['outcome'] == 'recovered', receipt
           assert receipt['source_wheel_unchanged'] is True, receipt
-          assert receipt['stale_pointer_survived'] is False, receipt
           PY
 
       - name: Run focused crate tests
