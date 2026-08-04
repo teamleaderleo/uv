@@ -102,6 +102,27 @@ replace_exact(
     name="hashed local archive constructor",
 )
 
+# Source-built wheels also use the shared unzip helper, but their cache family is
+# link-only and has no Archive pointer in which to persist this prototype receipt.
+# Keep that family compiling while retaining it as an explicit validation limit.
+replace_exact(
+    "        let id = self\n"
+    "            .unzip_wheel(\n"
+    "                &built_wheel.path,\n"
+    "                &built_wheel.target,\n"
+    "                DistRef::Source(dist),\n"
+    "            )\n"
+    "            .await?;\n",
+    "        let (id, _members) = self\n"
+    "            .unzip_wheel(\n"
+    "                &built_wheel.path,\n"
+    "                &built_wheel.target,\n"
+    "                DistRef::Source(dist),\n"
+    "            )\n"
+    "            .await?;\n",
+    name="source-built shared unzip caller",
+)
+
 replace_exact(
     "    ) -> Result<ArchiveId, Error> {\n",
     "    ) -> Result<(ArchiveId, Vec<(PathBuf, u64)>), Error> {\n",
