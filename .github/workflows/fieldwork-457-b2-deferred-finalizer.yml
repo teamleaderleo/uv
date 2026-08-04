@@ -34,6 +34,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           if ((git merge-base HEAD $env:CANDIDATE_HEAD) -ne $env:CANDIDATE_HEAD) {
             throw 'Experiment does not descend from exact candidate head'
           }
@@ -55,7 +56,9 @@ jobs:
             "runner=$env:RUNNER_OS"
           ) | Set-Content receipt/identity.txt
           rustc --version | Tee-Object -FilePath receipt/rust-version.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo --version | Tee-Object -FilePath receipt/cargo-version.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
@@ -67,15 +70,20 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           rustup component add rustfmt 2>&1 | Tee-Object -FilePath receipt/rustfmt-install.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo fmt --all --check 2>&1 | Tee-Object -FilePath receipt/fmt.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build -p uv --bin fieldwork_deferred_update_finalizer --features self-update 2>&1 |
             Tee-Object -FilePath receipt/build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run hostile finalization matrix
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $helper = Join-Path $env:GITHUB_WORKSPACE 'target/debug/fieldwork_deferred_update_finalizer.exe'
           $matrixRoot = Join-Path $env:RUNNER_TEMP 'deferred-finalizer-matrix'
           New-Item -ItemType Directory -Force -Path $matrixRoot | Out-Null
@@ -191,7 +199,7 @@ jobs:
             if ($null -ne $state.Child) {
               $state.Child.WaitForExit(15000) | Out-Null
               if (-not $state.Child.HasExited) {
-                throw "$description: child $($state.ChildPid) did not exit"
+                throw "${description}: child $($state.ChildPid) did not exit"
               }
               $actualCode = $state.Child.ExitCode
             } else {
@@ -199,7 +207,7 @@ jobs:
               $actualCode = [int](Get-Content -Raw -LiteralPath $state.ChildExitPath)
             }
             if ($actualCode -ne $expectedCode) {
-              throw "$description: expected code=$expectedCode actual=$actualCode"
+              throw "${description}: expected code=$expectedCode actual=$actualCode"
             }
           }
 
