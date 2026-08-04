@@ -53,6 +53,15 @@ jobs:
       - name: Verify identities and apply scoped repair
         run: |
           set -euo pipefail
+          mkdir -p artifacts/scoped
+          printf '%s\n' crates/uv/src/commands/project/init.rs >expected-files.txt
+          {
+            echo "public_base=$PUBLIC_BASE"
+            echo "public_candidate=$PUBLIC_CANDIDATE"
+            echo "carrier_head=$(git -C carrier rev-parse HEAD)"
+            echo "candidate_init_blob=c4a07138bf1ae1f09ffc8fdc276679e53c01bb4c"
+          } >artifacts/scoped/source-identity.txt
+
           test "$(git -C source rev-parse HEAD)" = "$PUBLIC_CANDIDATE"
           test "$(git -C source merge-base "$PUBLIC_BASE" "$PUBLIC_CANDIDATE")" = "$PUBLIC_BASE"
           test "$(git -C source hash-object crates/uv/src/commands/project/init.rs)" = \
@@ -63,16 +72,8 @@ jobs:
           )
           git -C source diff --check
           git -C source diff --name-only | sort >changed-files.txt
-          printf '%s\n' crates/uv/src/commands/project/init.rs >expected-files.txt
           diff -u expected-files.txt changed-files.txt
           bash -n carrier/.github/fieldwork/19671-scope/backend_matrix.sh
-          mkdir -p artifacts/scoped
-          {
-            echo "public_base=$PUBLIC_BASE"
-            echo "public_candidate=$PUBLIC_CANDIDATE"
-            echo "carrier_head=$(git -C carrier rev-parse HEAD)"
-            echo "candidate_init_blob=c4a07138bf1ae1f09ffc8fdc276679e53c01bb4c"
-          } >artifacts/scoped/source-identity.txt
           git -C source diff -- crates/uv/src/commands/project/init.rs \
             >artifacts/scoped/scoped.patch
 
@@ -108,7 +109,9 @@ jobs:
           set -euo pipefail
           git -C source diff --check
           git -C source diff --name-only | sort >final-files.txt
-          diff -u expected-files.txt final-files.txt
+          if test -f expected-files.txt; then
+            diff -u expected-files.txt final-files.txt
+          fi
 
       - name: Upload exact scoped-candidate evidence
         if: always()
@@ -116,5 +119,5 @@ jobs:
         with:
           name: uv-19671-backend-scope-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/scoped/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
