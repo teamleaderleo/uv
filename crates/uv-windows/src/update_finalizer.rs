@@ -16,21 +16,56 @@ pub struct UpdateFinalizeOptions {
     ///
     /// This is used only by the Fieldwork executable to prove rollback behavior.
     pub fail_after_backup: bool,
-    /// Optional marker written only after the finalizer owns a handle to the exact parent process.
+    /// Inject rollback failure after the post-backup failure.
     ///
-    /// The updating parent can wait for this marker before exiting, closing the spawn-to-open race
-    /// without trusting a later PID lookup.
+    /// The journal, staged replacement, and backup must remain available for a later recovery pass.
+    pub fail_rollback_after_backup: bool,
+    /// Optional marker written only after the finalizer owns a handle to the exact parent process.
     pub ready_path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdatePhase {
+    Prepared,
+    OldBackedUp,
+    NewLive,
+    Committed,
+}
+
+impl UpdatePhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Prepared => "prepared",
+            Self::OldBackedUp => "old-backed-up",
+            Self::NewLive => "new-live",
+            Self::Committed => "committed",
+        }
+    }
+
+    fn parse(value: &str) -> io::Result<Self> {
+        match value {
+            "prepared" => Ok(Self::Prepared),
+            "old-backed-up" => Ok(Self::OldBackedUp),
+            "new-live" => Ok(Self::NewLive),
+            "committed" => Ok(Self::Committed),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unknown update journal phase `{value}`"),
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct UpdateJournal {
+    canonical: PathBuf,
+    staged: PathBuf,
+    backup: PathBuf,
+    phase: UpdatePhase,
+}
+
 /// Stage a replacement next to the canonical file, wait for the parent process to exit,
-/// then commit the replacement with an explicit backup and ordinary-error rollback.
-///
-/// The important ordering guarantee is that parent-process authority is acquired before the
-/// potentially slow copy, and all validation and copying happen before the canonical file is
-/// touched. The remaining commit section contains only same-directory renames. A small journal
-/// records enough information for a future recovery pass if the machine loses power between those
-/// renames.
+/// then commit the replacement with an explicit backup and recoverable phase journal.
 pub fn finalize_update_after_process_exit(
     parent_process_id: u32,
     canonical: &Path,
@@ -40,9 +75,8 @@ pub fn finalize_update_after_process_exit(
     ensure_regular_file(canonical, "canonical executable")?;
     ensure_regular_file(replacement, "staged replacement")?;
 
-    // Acquire a synchronization handle before any slow staging work. The handle continues to
-    // identify the original process object if the parent exits while the replacement is copied;
-    // reopening by PID afterward would introduce an exit/PID-reuse race.
+    // Acquire synchronization authority before slow staging. The owned handle continues to
+    // identify the original process object even if its PID is later reused.
     let parent_process = open_process_for_wait(parent_process_id)?;
     if let Some(ready_path) = options.ready_path.as_deref() {
         write_ready_marker(ready_path, parent_process_id)?;
@@ -64,46 +98,148 @@ pub fn finalize_update_after_process_exit(
     let suffix = format!("{}.{}", parent_process_id, std::process::id());
     let staged = parent.join(format!(".{file_name}.update-stage.{suffix}"));
     let backup = parent.join(format!(".{file_name}.update-backup.{suffix}"));
-    let journal = parent.join(format!(".{file_name}.update-journal.{suffix}"));
+    let journal_path = parent.join(format!(".{file_name}.update-journal.{suffix}"));
+    let mut journal = UpdateJournal {
+        canonical: canonical.to_path_buf(),
+        staged,
+        backup,
+        phase: UpdatePhase::Prepared,
+    };
 
-    remove_if_exists(&staged)?;
-    remove_if_exists(&backup)?;
-    remove_if_exists(&journal)?;
+    validate_journal_paths(&journal_path, &journal)?;
+    remove_if_exists(&journal.staged)?;
+    remove_if_exists(&journal.backup)?;
+    remove_if_exists(&journal_path)?;
 
-    // This is the only potentially cross-filesystem or long-running file transfer. It happens
-    // while the old canonical executable is still present and runnable.
-    fs::copy(replacement, &staged)?;
-    sync_file(&staged)?;
-    write_journal(&journal, canonical, &staged, &backup)?;
+    // The only potentially long or cross-filesystem copy happens while canonical is untouched.
+    fs::copy(replacement, &journal.staged)?;
+    sync_file(&journal.staged)?;
+    if let Err(error) = write_journal(&journal_path, &journal) {
+        remove_if_exists(&journal.staged).ok();
+        remove_if_exists(&journal_path).ok();
+        return Err(error);
+    }
 
     wait_for_process_exit(&parent_process, parent_process_id)?;
 
-    fs::rename(canonical, &backup)?;
+    fs::rename(&journal.canonical, &journal.backup)?;
+    journal.phase = UpdatePhase::OldBackedUp;
+    if let Err(error) = write_journal(&journal_path, &journal) {
+        return rollback_after_error(&journal_path, &journal, error, false);
+    }
 
     if options.fail_after_backup {
-        rollback_backup(canonical, &backup)?;
-        remove_if_exists(&staged)?;
-        remove_if_exists(&journal)?;
-        return Err(io::Error::other(
-            "injected failure after canonical backup",
-        ));
+        return rollback_after_error(
+            &journal_path,
+            &journal,
+            io::Error::other("injected failure after canonical backup"),
+            options.fail_rollback_after_backup,
+        );
     }
 
-    if let Err(error) = fs::rename(&staged, canonical) {
-        let rollback_error = rollback_backup(canonical, &backup).err();
-        remove_if_exists(&staged).ok();
-        remove_if_exists(&journal).ok();
-        return match rollback_error {
-            Some(rollback_error) => Err(io::Error::other(format!(
-                "failed to commit replacement: {error}; rollback also failed: {rollback_error}"
-            ))),
-            None => Err(error),
-        };
+    if let Err(error) = fs::rename(&journal.staged, &journal.canonical) {
+        return rollback_after_error(&journal_path, &journal, error, false);
     }
 
-    remove_if_exists(&backup)?;
-    remove_if_exists(&journal)?;
+    journal.phase = UpdatePhase::NewLive;
+    if let Err(error) = write_journal(&journal_path, &journal) {
+        return rollback_after_error(&journal_path, &journal, error, false);
+    }
+
+    journal.phase = UpdatePhase::Committed;
+    if let Err(error) = write_journal(&journal_path, &journal) {
+        return rollback_after_error(&journal_path, &journal, error, false);
+    }
+
+    // Cleanup failures after the committed journal remain recoverable: the journal is removed last.
+    remove_if_exists(&journal.backup)?;
+    remove_if_exists(&journal.staged)?;
+    remove_if_exists(&journal_path)?;
     Ok(())
+}
+
+/// Recover one interrupted update transaction from its phase journal.
+///
+/// Every non-committed phase conservatively chooses the old generation. A committed phase keeps
+/// the new canonical file and removes transaction debris. Repeated recovery after cleanup is a
+/// no-op.
+pub fn recover_update_from_journal(journal_path: &Path) -> io::Result<()> {
+    let journal = match read_journal(journal_path) {
+        Ok(journal) => journal,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    validate_journal_paths(journal_path, &journal)?;
+
+    match journal.phase {
+        UpdatePhase::Committed => {
+            ensure_regular_file(&journal.canonical, "committed canonical executable")?;
+            remove_if_exists(&journal.backup)?;
+            remove_if_exists(&journal.staged)?;
+            remove_if_exists(journal_path)?;
+        }
+        UpdatePhase::Prepared | UpdatePhase::OldBackedUp | UpdatePhase::NewLive => {
+            if journal.backup.exists() {
+                if journal.canonical.exists() {
+                    remove_if_exists(&journal.canonical)?;
+                }
+                fs::rename(&journal.backup, &journal.canonical)?;
+            } else if !journal.canonical.exists() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "uncommitted update has neither canonical nor backup file: `{}`",
+                        journal_path.display()
+                    ),
+                ));
+            }
+
+            ensure_regular_file(&journal.canonical, "recovered canonical executable")?;
+            remove_if_exists(&journal.staged)?;
+            remove_if_exists(&journal.backup)?;
+            remove_if_exists(journal_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn rollback_after_error(
+    journal_path: &Path,
+    journal: &UpdateJournal,
+    source: io::Error,
+    inject_rollback_failure: bool,
+) -> io::Result<()> {
+    if inject_rollback_failure {
+        return Err(io::Error::other(format!(
+            "update failed: {source}; rollback also failed: injected rollback failure; recovery journal preserved at `{}`",
+            journal_path.display()
+        )));
+    }
+
+    if let Err(rollback_error) = rollback_backup(&journal.canonical, &journal.backup) {
+        return Err(io::Error::other(format!(
+            "update failed: {source}; rollback also failed: {rollback_error}; recovery journal preserved at `{}`",
+            journal_path.display()
+        )));
+    }
+
+    // If cleanup after a successful rollback fails, preserve the journal. Its uncommitted phase and
+    // restored canonical path let the next recovery pass finish removing stale transaction files.
+    if let Err(cleanup_error) = remove_if_exists(&journal.staged) {
+        return Err(io::Error::other(format!(
+            "update failed: {source}; rollback restored canonical but stage cleanup failed: {cleanup_error}; recovery journal preserved at `{}`",
+            journal_path.display()
+        )));
+    }
+    if let Err(cleanup_error) = remove_if_exists(journal_path) {
+        return Err(io::Error::other(format!(
+            "update failed: {source}; rollback restored canonical but journal cleanup failed: {cleanup_error}; journal remains at `{}`",
+            journal_path.display()
+        )));
+    }
+
+    Err(source)
 }
 
 fn ensure_regular_file(path: &Path, description: &str) -> io::Result<()> {
@@ -133,17 +269,106 @@ fn write_ready_marker(path: &Path, parent_process_id: u32) -> io::Result<()> {
     file.sync_all()
 }
 
-fn write_journal(
-    journal: &Path,
-    canonical: &Path,
-    staged: &Path,
-    backup: &Path,
-) -> io::Result<()> {
-    let mut file = File::create(journal)?;
-    writeln!(file, "canonical={}", canonical.display())?;
-    writeln!(file, "staged={}", staged.display())?;
-    writeln!(file, "backup={}", backup.display())?;
+fn write_journal(path: &Path, journal: &UpdateJournal) -> io::Result<()> {
+    let mut file = File::create(path)?;
+    writeln!(file, "version=1")?;
+    writeln!(file, "phase={}", journal.phase.as_str())?;
+    writeln!(file, "canonical={}", journal.canonical.display())?;
+    writeln!(file, "staged={}", journal.staged.display())?;
+    writeln!(file, "backup={}", journal.backup.display())?;
     file.sync_all()
+}
+
+fn read_journal(path: &Path) -> io::Result<UpdateJournal> {
+    let contents = fs::read_to_string(path)?;
+    let mut version = None;
+    let mut phase = None;
+    let mut canonical = None;
+    let mut staged = None;
+    let mut backup = None;
+
+    for line in contents.lines() {
+        let (key, value) = line.split_once('=').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid update journal line `{line}`"),
+            )
+        })?;
+        match key {
+            "version" => version = Some(value),
+            "phase" => phase = Some(UpdatePhase::parse(value)?),
+            "canonical" => canonical = Some(PathBuf::from(value)),
+            "staged" => staged = Some(PathBuf::from(value)),
+            "backup" => backup = Some(PathBuf::from(value)),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unknown update journal field `{key}`"),
+                ));
+            }
+        }
+    }
+
+    if version != Some("1") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unsupported or missing update journal version",
+        ));
+    }
+
+    Ok(UpdateJournal {
+        phase: phase.ok_or_else(|| missing_journal_field("phase"))?,
+        canonical: canonical.ok_or_else(|| missing_journal_field("canonical"))?,
+        staged: staged.ok_or_else(|| missing_journal_field("staged"))?,
+        backup: backup.ok_or_else(|| missing_journal_field("backup"))?,
+    })
+}
+
+fn missing_journal_field(field: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("missing update journal field `{field}`"),
+    )
+}
+
+fn validate_journal_paths(journal_path: &Path, journal: &UpdateJournal) -> io::Result<()> {
+    let transaction_dir = journal_path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "update journal has no parent directory",
+        )
+    })?;
+
+    for (name, path) in [
+        ("canonical", &journal.canonical),
+        ("staged", &journal.staged),
+        ("backup", &journal.backup),
+    ] {
+        if path.parent() != Some(transaction_dir) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "update journal {name} path escapes transaction directory: `{}`",
+                    path.display()
+                ),
+            ));
+        }
+    }
+
+    if journal.canonical == journal.staged
+        || journal.canonical == journal.backup
+        || journal.staged == journal.backup
+        || journal_path == journal.canonical
+        || journal_path == journal.staged
+        || journal_path == journal.backup
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "update journal paths must be distinct",
+        ));
+    }
+
+    Ok(())
 }
 
 fn rollback_backup(canonical: &Path, backup: &Path) -> io::Result<()> {
@@ -178,6 +403,3 @@ fn wait_for_process_exit(handle: &OwnedHandle, process_id: u32) -> io::Result<()
     }
     Ok(())
 }
-
-#[allow(dead_code)]
-fn _assert_paths_are_owned(_: PathBuf) {}
