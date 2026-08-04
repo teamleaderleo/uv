@@ -37,7 +37,7 @@ def main() -> None:
     script_end = """            // Add a build system
             let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
 """
-    script_replacement = """        // Include additional project configuration for packaged applications
+    script_replacement = r"""        // Include additional project configuration for packaged applications
         if package {
             let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
             let uv_stub_package = build_backend == ProjectBuildBackend::Uv
