@@ -58,37 +58,87 @@ function Assert-NoTransactionFiles($directory, $message) {
   }
 }
 
+# Production launches the finalizer from the updater process. Keep that relationship exact:
+# the parent below spawns the helper with its own PID, records the child identity, and then
+# remains alive until the outer matrix terminates it.
+$ParentScript = Join-Path $MatrixRoot 'launch-finalizer-parent.ps1'
+@'
+param([Parameter(Mandatory = $true)][string]$ConfigPath)
+$ErrorActionPreference = 'Stop'
+$config = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json
+$arguments = @(
+  "$PID",
+  [string]$config.canonical,
+  [string]$config.replacement,
+  '--ready-file',
+  [string]$config.readyPath
+) + @($config.extraArgs)
+$child = Start-Process -FilePath ([string]$config.helper) -ArgumentList $arguments `
+  -PassThru -NoNewWindow `
+  -RedirectStandardOutput ([string]$config.childStdout) `
+  -RedirectStandardError ([string]$config.childStderr)
+Set-Content -LiteralPath ([string]$config.childPidPath) -Value $child.Id
+Set-Content -LiteralPath ([string]$config.parentReadyPath) -Value $PID
+while ($true) {
+  Start-Sleep -Milliseconds 100
+}
+'@ | Set-Content -LiteralPath $ParentScript -Encoding utf8
+
 function Start-LiveFinalizer($name, $canonical, $replacement, [string[]]$extraArgs) {
-  $ready = Join-Path $MatrixRoot "$name-ready.txt"
-  $stdout = Join-Path $ReceiptDirectory "$name-finalizer-stdout.txt"
-  $stderr = Join-Path $ReceiptDirectory "$name-finalizer-stderr.txt"
+  $parentReady = Join-Path $MatrixRoot "$name-parent-ready.txt"
+  $childPidPath = Join-Path $MatrixRoot "$name-child-pid.txt"
+  $ready = Join-Path $MatrixRoot "$name-finalizer-ready.txt"
+  $configPath = Join-Path $MatrixRoot "$name-config.json"
+  $parentStdout = Join-Path $ReceiptDirectory "$name-parent-stdout.txt"
+  $parentStderr = Join-Path $ReceiptDirectory "$name-parent-stderr.txt"
+  $childStdout = Join-Path $ReceiptDirectory "$name-finalizer-stdout.txt"
+  $childStderr = Join-Path $ReceiptDirectory "$name-finalizer-stderr.txt"
+
+  @{
+    helper = $Helper
+    canonical = $canonical
+    replacement = $replacement
+    extraArgs = @($extraArgs)
+    readyPath = $ready
+    childPidPath = $childPidPath
+    parentReadyPath = $parentReady
+    childStdout = $childStdout
+    childStderr = $childStderr
+  } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $configPath
+
   $parent = Start-Process -FilePath 'powershell' -ArgumentList @(
-    '-NoProfile', '-Command', 'Start-Sleep -Seconds 60'
-  ) -PassThru -WindowStyle Hidden
-  $arguments = @(
-    "$($parent.Id)",
-    $canonical,
-    $replacement,
-    '--ready-file',
-    $ready
-  ) + @($extraArgs)
-  $finalizer = Start-Process -FilePath $Helper -ArgumentList $arguments `
-    -PassThru -NoNewWindow `
-    -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    '-NoProfile', '-File', $ParentScript, $configPath
+  ) -PassThru -WindowStyle Hidden `
+    -RedirectStandardOutput $parentStdout -RedirectStandardError $parentStderr
+
+  Wait-ForFile $parentReady "$name parent readiness"
+  Wait-ForFile $childPidPath "$name finalizer pid"
   Wait-ForFile $ready "$name parent-handle readiness"
+
+  $recordedParentId = [int](Get-Content -Raw -LiteralPath $parentReady)
+  if ($recordedParentId -ne $parent.Id) {
+    throw "$name parent identity mismatch: launched=$($parent.Id) recorded=$recordedParentId"
+  }
+  $childPid = [int](Get-Content -Raw -LiteralPath $childPidPath)
+  $finalizer = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+  if ($null -eq $finalizer) {
+    throw "$name finalizer exited before a live process handle was acquired"
+  }
+
   $marker = Get-Content -Raw -LiteralPath $ready
   if ($marker -notmatch "parent_process_id=$($parent.Id)") {
     throw "$name readiness marker does not identify parent $($parent.Id): $marker"
   }
-  if ($marker -notmatch "finalizer_process_id=$($finalizer.Id)") {
-    throw "$name readiness marker does not identify finalizer $($finalizer.Id): $marker"
+  if ($marker -notmatch "finalizer_process_id=$childPid") {
+    throw "$name readiness marker does not identify finalizer ${childPid}: $marker"
   }
+
   [pscustomobject]@{
     Parent = $parent
     Finalizer = $finalizer
     Ready = $ready
-    Stdout = $stdout
-    Stderr = $stderr
+    Stdout = $childStdout
+    Stderr = $childStderr
   }
 }
 
@@ -99,8 +149,11 @@ function Finish-LiveFinalizer($state, $expectedExit) {
     throw "parent process $($state.Parent.Id) did not exit"
   }
   $state.Finalizer.WaitForExit(15000) | Out-Null
-  if (-not $state.Finalizer.HasExited -or $state.Finalizer.ExitCode -ne $expectedExit) {
-    throw "finalizer returned unexpected result: exited=$($state.Finalizer.HasExited) code=$($state.Finalizer.ExitCode) expected=$expectedExit"
+  if (-not $state.Finalizer.HasExited) {
+    throw "finalizer did not exit after its parent"
+  }
+  if ($state.Finalizer.ExitCode -ne $expectedExit) {
+    throw "finalizer returned $($state.Finalizer.ExitCode), expected $expectedExit"
   }
 }
 
@@ -255,6 +308,7 @@ Assert-Absent $fBackup[0].FullName 'later recovery retained backup'
 Assert-Absent $fStage[0].FullName 'later recovery retained stage'
 
 @{
+  parentAuthority = 'actual updater parent spawns finalizer and publishes readiness only after child owns parent handle'
   preparedRollback = 'pass'
   oldBackedUpRollback = 'pass'
   newLiveRollback = 'pass'
