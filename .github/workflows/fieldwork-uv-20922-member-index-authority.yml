@@ -1,0 +1,124 @@
+name: Fieldwork uv member index authority
+
+on:
+  push:
+    branches:
+      - fieldwork/20922-member-index-authority-matrix
+    paths:
+      - .github/fieldwork/20922-member-index-authority/**
+      - .github/workflows/fieldwork-uv-20922-member-index-authority.yml
+  pull_request:
+    paths:
+      - .github/fieldwork/20922-member-index-authority/**
+      - .github/workflows/fieldwork-uv-20922-member-index-authority.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-uv-20922-authority-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PUBLIC_BASE: 92b7185783b56e8ad1dbe0bb7600432708f2c9fb
+  PUBLIC_CANDIDATE: 64d6042d4b30830042d3a402d0b2e953730a8ede
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  base-vs-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+
+    steps:
+      - name: Check out controlled carrier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: carrier
+
+      - name: Check out exact public candidate
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: astral-sh/uv
+          ref: ${{ env.PUBLIC_CANDIDATE }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+
+      - name: Verify exact identities and carrier syntax
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/bin artifacts/results
+          test "$(git -C source rev-parse HEAD)" = "$PUBLIC_CANDIDATE"
+          test "$(git -C source merge-base "$PUBLIC_BASE" "$PUBLIC_CANDIDATE")" = "$PUBLIC_BASE"
+          git -C source diff --check "$PUBLIC_BASE" "$PUBLIC_CANDIDATE"
+          git -C source diff --name-only "$PUBLIC_BASE" "$PUBLIC_CANDIDATE" | sort \
+            >artifacts/results/public-candidate-files.txt
+          git -C source diff "$PUBLIC_BASE" "$PUBLIC_CANDIDATE" \
+            >artifacts/results/public-candidate.patch
+          bash -n carrier/.github/fieldwork/20922-member-index-authority/matrix.sh
+          {
+            echo "public_base=$PUBLIC_BASE"
+            echo "public_candidate=$PUBLIC_CANDIDATE"
+            echo "carrier_head=$(git -C carrier rev-parse HEAD)"
+          } >artifacts/results/identity.txt
+
+      - name: Install Rust toolchain
+        uses: moonrepo/setup-rust@abb2d32350334249b178c401e5ec5836e0cd88d3
+        with:
+          cache-base: uv-20922-member-index-authority
+          cache-target: debug
+
+      - name: Build exact base
+        working-directory: source
+        run: |
+          set -euo pipefail
+          git checkout --detach "$PUBLIC_BASE"
+          test "$(git rev-parse HEAD)" = "$PUBLIC_BASE"
+          cargo build --bin uv
+          cp target/debug/uv ../artifacts/bin/uv-base
+
+      - name: Build and check exact candidate
+        working-directory: source
+        run: |
+          set -euo pipefail
+          git checkout --detach "$PUBLIC_CANDIDATE"
+          test "$(git rev-parse HEAD)" = "$PUBLIC_CANDIDATE"
+          rustup component add rustfmt
+          cargo fmt --all --check
+          cargo build --bin uv
+          cp target/debug/uv ../artifacts/bin/uv-candidate
+
+      - name: Run exact base authority matrix
+        run: |
+          set -euo pipefail
+          bash carrier/.github/fieldwork/20922-member-index-authority/matrix.sh \
+            artifacts/bin/uv-base base artifacts/results
+
+      - name: Run exact candidate authority matrix
+        run: |
+          set -euo pipefail
+          bash carrier/.github/fieldwork/20922-member-index-authority/matrix.sh \
+            artifacts/bin/uv-candidate candidate artifacts/results
+
+      - name: Verify source and carrier cleanup
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "$PUBLIC_CANDIDATE"
+          test -z "$(git -C source status --short --untracked-files=no)"
+          test -z "$(git -C carrier status --short --untracked-files=no)"
+
+      - name: Upload exact authority evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-20922-member-index-authority-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/results/
+          if-no-files-found: warn
+          retention-days: 30
