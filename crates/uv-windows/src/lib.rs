@@ -22,6 +22,8 @@ pub use job::{Job, JobError};
 #[cfg(feature = "std")]
 pub use spawn::spawn_child;
 #[cfg(feature = "std")]
-pub use update_finalizer::{UpdateFinalizeOptions, finalize_update_after_process_exit};
+pub use update_finalizer::{
+    UpdateFinalizeOptions, finalize_update_after_process_exit, recover_update_from_journal,
+};
 #[cfg(feature = "std")]
 pub use wine::is_wine;
