@@ -104,6 +104,7 @@ dependencies = [$dependency]
 EOF
 }
 
+lock_status=
 run_lock() {
     local label=$1
     local project_dir=$2
@@ -115,10 +116,9 @@ run_lock() {
         cd "$project_dir"
         UV_CACHE_DIR="$work_dir/cache-$label" UV_NO_PROGRESS=1 "$uv_bin" lock
     ) >"$stdout" 2>"$stderr"
-    local status=$?
+    lock_status=$?
     set -e
-    printf '%s\n' "$label=$status" >>"$summary"
-    return "$status"
+    printf '%s\n' "$label=$lock_status" >>"$summary"
 }
 
 : >"$summary"
@@ -135,6 +135,7 @@ url = "$populated_index"
 default = true
 EOF
 run_lock root-owned "$root_project"
+test "$lock_status" -eq 0
 
 # Discriminator B: the dependency and index are declared by the same member.
 direct_workspace="$work_dir/direct-workspace"
@@ -154,10 +155,8 @@ cat >>"$direct_workspace/child/pyproject.toml" <<EOF
 name = "child-index"
 url = "$populated_index"
 EOF
-set +e
 run_lock direct-member "$direct_workspace"
-direct_status=$?
-set -e
+direct_status=$lock_status
 
 # Discriminator C: an unrelated sibling owns the only usable index.
 sibling_workspace="$work_dir/sibling-workspace"
@@ -178,10 +177,8 @@ cat >>"$sibling_workspace/index-owner/pyproject.toml" <<EOF
 name = "owner-index"
 url = "$populated_index"
 EOF
-set +e
 run_lock sibling-owned "$sibling_workspace"
-sibling_status=$?
-set -e
+sibling_status=$lock_status
 
 # Control D: a named source pin remains usable from the declaring member.
 named_workspace="$work_dir/named-workspace"
@@ -206,6 +203,7 @@ url = "$populated_index"
 explicit = true
 EOF
 run_lock named-source "$named_workspace"
+test "$lock_status" -eq 0
 
 case "$variant" in
     base)
