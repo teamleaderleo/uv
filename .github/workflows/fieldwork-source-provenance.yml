@@ -74,19 +74,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify repair script
-        run: python3 -m py_compile fieldwork/source-provenance-probe/apply_uv_dev_304_build_fix.py
-
-      - name: Apply exact uv-dev #304 diff
+      - name: Verify retained draft and audit scripts
         run: |
+          python3 -m py_compile \
+            fieldwork/source-provenance-probe/apply_uv_dev_304_build_fix.py
           git apply --check fieldwork/source-provenance-probe/uv-dev-304.diff
-          git apply fieldwork/source-provenance-probe/uv-dev-304.diff
 
-      - name: Apply isolated draft compile repair
+      - name: Apply and fence exact uv-dev #304 draft
         run: |
+          set -euo pipefail
+          mkdir -p fieldwork/source-provenance-probe/out
+          git apply fieldwork/source-provenance-probe/uv-dev-304.diff
           python3 fieldwork/source-provenance-probe/apply_uv_dev_304_build_fix.py
           git diff --check
-          test "$(git diff --name-only)" = "crates/uv-resolver/src/lock/mod.rs"
+          git diff --name-only | sort > fieldwork/source-provenance-probe/out/draft-files.txt
+          test "$(cat fieldwork/source-provenance-probe/out/draft-files.txt)" = "$(printf '%s\n' \
+            crates/uv-resolver/src/lock/mod.rs \
+            crates/uv-resolver/src/resolver/urls.rs \
+            crates/uv/tests/lock/lock.rs)"
+          git diff --binary > fieldwork/source-provenance-probe/out/uv-dev-304-applied.patch
+          {
+            echo 'public_draft_head=675839b0b1b1c66ee3b02139e1237094722ec2b2'
+            echo "carrier_head=$(git rev-parse HEAD)"
+            echo 'compile_repair=already-present-in-retained-draft'
+          } > fieldwork/source-provenance-probe/out/draft-identity.txt
 
       - name: Install bootstrap uv
         uses: astral-sh/setup-uv@v6
@@ -114,7 +125,7 @@ jobs:
 
       - name: Run editable and non-editable matrix
         env:
-          UV_VERSION: uv-dev-304-675839b0-plus-semicolon
+          UV_VERSION: uv-dev-304-675839b0
         run: bash fieldwork/source-provenance-probe/run.sh
 
       - name: Upload exact draft-validation receipts
@@ -123,4 +134,4 @@ jobs:
         with:
           name: uv-dev-304-source-provenance
           path: fieldwork/source-provenance-probe/out/
-          if-no-files-found: warn
+          if-no-files-found: error
