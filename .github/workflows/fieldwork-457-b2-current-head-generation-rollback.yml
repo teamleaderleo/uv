@@ -8,6 +8,7 @@ on:
       - .github/workflows/fieldwork-457-b2-current-head-generation-rollback.yml
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -20,7 +21,7 @@ env:
 
 jobs:
   source-audit:
-    name: Audit generated source and exact diff
+    name: Audit deterministic generation and exact diff
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -53,21 +54,18 @@ jobs:
           mkdir -p receipt-source
           python .github/fieldwork/457-b2/inject_generation_rollback.py
           python .github/fieldwork/457-b2/polish_generation_rollback.py
-          rustup component add rustfmt
-          cargo fmt --all
-          cargo fmt --all --check 2>&1 | tee receipt-source/fmt.log
           git diff --check
           test "$(git diff --name-only "$CANDIDATE_HEAD")" = \
             'crates/uv/src/commands/self_update.rs'
           git diff -- crates/uv/src/commands/self_update.rs \
-            > receipt-source/proposed-source.diff
+            > receipt-source/unformatted-proposed-source.diff
           cp crates/uv/src/commands/self_update.rs \
-            receipt-source/generated-self-update.rs
+            receipt-source/unformatted-generated-self-update.rs
           {
             echo "experiment_head=$(git rev-parse HEAD)"
             echo "candidate_head=$CANDIDATE_HEAD"
-            echo "authority=source-generation-and-diff-only"
-            echo "windows_compile_authority=generation-rollback job"
+            echo "authority=deterministic-transform-and-exact-diff-only"
+            echo "format_compile_test_authority=windows-generation-rollback-job"
           } > receipt-source/identity.txt
 
       - name: Upload source audit
@@ -94,6 +92,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           if ((git merge-base HEAD $env:CANDIDATE_HEAD) -ne $env:CANDIDATE_HEAD) {
             throw 'Experiment does not descend from exact public candidate'
           }
@@ -114,7 +113,9 @@ jobs:
             "runner=$env:RUNNER_OS"
           ) | Set-Content receipt/identity.txt
           rustc --version | Tee-Object -FilePath receipt/rust-version.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo --version | Tee-Object -FilePath receipt/cargo-version.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
@@ -126,11 +127,15 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           python .github/fieldwork/457-b2/inject_generation_rollback.py
           python .github/fieldwork/457-b2/polish_generation_rollback.py
           rustup component add rustfmt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo fmt --all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo fmt --all --check 2>&1 | Tee-Object -FilePath receipt/fmt.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
           git diff -- crates/uv/src/commands/self_update.rs |
             Set-Content receipt/proposed-source.diff
@@ -140,15 +145,19 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           cargo test -p uv --lib --features self-update fieldwork_current_head_generation_rollback -- --nocapture 2>&1 |
             Tee-Object -FilePath receipt/test.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check affected Windows targets
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           cargo check -p uv --all-targets --features self-update 2>&1 |
             Tee-Object -FilePath receipt/check.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Record experiment contract
         if: always()
@@ -181,35 +190,38 @@ jobs:
           retention-days: 30
 
   materialize-source:
-    name: Materialize validated source candidate
+    name: Materialize Windows-authoritative source candidate
     needs:
       - source-audit
       - generation-rollback
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
     env:
+      GH_TOKEN: ${{ github.token }}
       SOURCE_BRANCH: candidate/457-b2-windows-generation-rollback
     steps:
-      - name: Check out validated experiment
+      - name: Check out exact candidate base
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
+          ref: ${{ env.CANDIDATE_HEAD }}
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Generate exact product source
+      - name: Download Windows-authoritative generated source
         shell: bash
         run: |
           set -euo pipefail
-          cp .github/fieldwork/457-b2/inject_generation_rollback.py \
-            "$RUNNER_TEMP/inject_generation_rollback.py"
-          cp .github/fieldwork/457-b2/polish_generation_rollback.py \
-            "$RUNNER_TEMP/polish_generation_rollback.py"
-          git checkout --detach "$CANDIDATE_HEAD"
-          python "$RUNNER_TEMP/inject_generation_rollback.py"
-          python "$RUNNER_TEMP/polish_generation_rollback.py"
-          rustup component add rustfmt
-          cargo fmt --all
+          mkdir -p "$RUNNER_TEMP/windows-receipt"
+          gh run download "$GITHUB_RUN_ID" \
+            --name fieldwork-457-b2-current-head-generation-rollback \
+            --dir "$RUNNER_TEMP/windows-receipt"
+          test -f "$RUNNER_TEMP/windows-receipt/generated-self-update.rs"
+          grep -Fx "candidate_head=$CANDIDATE_HEAD" \
+            "$RUNNER_TEMP/windows-receipt/identity.txt"
+          cp "$RUNNER_TEMP/windows-receipt/generated-self-update.rs" \
+            crates/uv/src/commands/self_update.rs
           git diff --check
           test "$(git diff --name-only "$CANDIDATE_HEAD")" = \
             'crates/uv/src/commands/self_update.rs'
