@@ -25,7 +25,7 @@ replace(
     "                    dist,\n"
     "                )\n"
     "                .map_err(Error::InstallWheelError)?;\n",
-    3,
+    2,
 )
 replace(
     "        validate_and_heal_record(temp_dir.path(), files.iter(), dist)\n"
