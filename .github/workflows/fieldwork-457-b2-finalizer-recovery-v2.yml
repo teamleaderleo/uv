@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  EXPERIMENT_BASE: 4928f75fd075bf8cd34ccd635205983131ce79ed
+  EXPERIMENT_BASE: e78c80fcfd53e7f96a6068a9d6494a9c977f3f50
   INPUT_HEAD: ${{ github.event.pull_request.head.sha }}
   SOURCE_BRANCH: ${{ github.head_ref }}
   CI: 1
