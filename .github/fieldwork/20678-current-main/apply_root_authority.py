@@ -42,12 +42,15 @@ def main() -> None:
     // it through `tool.uv.sources` and the index is therefore package-specific.
     let mut workspace_index_content = None;
     if !raw {
+        // `index` borrows from the original vector. Snapshot the routing decision before the
+        // validated indexes are consumed below, so no borrow survives the move.
+        let route_indexes_to_workspace_root = index.is_none();
         let locations = IndexLocations::new(indexes, Vec::new(), false);
         let mut indexes = locations.defined_indexes().collect::<Vec<_>>();
         indexes.reverse();
 
         if let AddTarget::Project(project, _) = &target
-            && index.is_none()
+            && route_indexes_to_workspace_root
             && project.workspace().install_path() != project.root()
         {
             let workspace = project.workspace();
