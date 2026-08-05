@@ -150,7 +150,7 @@ function Finish-LiveFinalizer($state, $expectedExit) {
   }
   $state.Finalizer.WaitForExit(15000) | Out-Null
   if (-not $state.Finalizer.HasExited) {
-    throw "finalizer did not exit after its parent"
+    throw 'finalizer did not exit after its parent'
   }
   if ($state.Finalizer.ExitCode -ne $expectedExit) {
     throw "finalizer returned $($state.Finalizer.ExitCode), expected $expectedExit"
@@ -172,6 +172,23 @@ Assert-Content $pCanonical 'old-version' 'prepared recovery did not preserve old
 Assert-Absent $pStaged 'prepared recovery did not remove stage'
 Assert-Absent $pJournal 'prepared recovery did not remove journal'
 Invoke-Recovery 'prepared-repeat' $pJournal
+
+# If the first atomic publication never acquired the destination name, the complete write-side
+# journal still provides enough information to discard the stage and keep the old canonical.
+$writeOnly = Join-Path $MatrixRoot 'write-side-only'
+New-Item -ItemType Directory -Force -Path $writeOnly | Out-Null
+$wCanonical = Join-Path $writeOnly 'uv.exe'
+$wStaged = Join-Path $writeOnly '.uv.exe.stage'
+$wBackup = Join-Path $writeOnly '.uv.exe.backup'
+$wJournal = Join-Path $writeOnly '.uv.exe.journal'
+$wWriteJournal = "$wJournal.write"
+Set-Content -NoNewline -LiteralPath $wCanonical -Value 'old-version'
+Set-Content -NoNewline -LiteralPath $wStaged -Value 'new-version'
+Write-Journal $wWriteJournal 'prepared' $wCanonical $wStaged $wBackup
+Invoke-Recovery 'write-side-only' $wJournal
+Assert-Content $wCanonical 'old-version' 'write-side recovery did not preserve old canonical'
+Assert-Absent $wStaged 'write-side recovery retained stage'
+Assert-Absent $wWriteJournal 'write-side recovery retained temporary journal'
 
 # OLD BACKED UP: canonical is absent; restore backup and discard stage.
 $backed = Join-Path $MatrixRoot 'old-backed-up'
@@ -307,9 +324,50 @@ Assert-Absent $fJournal[0].FullName 'later recovery retained journal'
 Assert-Absent $fBackup[0].FullName 'later recovery retained backup'
 Assert-Absent $fStage[0].FullName 'later recovery retained stage'
 
+# The next phase is written and synced under a temporary name. If publication fails and rollback
+# also fails, the prior complete `prepared` journal must remain parseable and authoritative.
+$failedPublish = Join-Path $MatrixRoot 'failed-journal-publish'
+New-Item -ItemType Directory -Force -Path $failedPublish | Out-Null
+$jCanonical = Join-Path $failedPublish 'uv.exe'
+$jReplacement = Join-Path $MatrixRoot 'failed-journal-publish-new.exe'
+Set-Content -NoNewline -LiteralPath $jCanonical -Value 'old-version'
+Set-Content -NoNewline -LiteralPath $jReplacement -Value 'new-version'
+$jState = Start-LiveFinalizer 'failed-journal-publish' $jCanonical $jReplacement @(
+  '--fail-journal-publish-after-backup', '--fail-rollback-after-backup'
+)
+Assert-Content $jCanonical 'old-version' 'journal publish failure changed canonical before parent exit'
+Finish-LiveFinalizer $jState 42
+Assert-Absent $jCanonical 'journal publish plus rollback failure unexpectedly restored canonical'
+$jJournal = @(Get-ChildItem -LiteralPath $failedPublish -Force |
+  Where-Object Name -Like '*.update-journal.*' |
+  Where-Object Name -NotLike '*.write')
+$jWriteJournal = @(Get-ChildItem -LiteralPath $failedPublish -Force |
+  Where-Object Name -Like '*.update-journal.*.write')
+$jBackup = @(Get-ChildItem -LiteralPath $failedPublish -Force |
+  Where-Object Name -Like '*.update-backup.*')
+$jStage = @(Get-ChildItem -LiteralPath $failedPublish -Force |
+  Where-Object Name -Like '*.update-stage.*')
+if ($jJournal.Count -ne 1 -or $jWriteJournal.Count -ne 0 -or $jBackup.Count -ne 1 -or $jStage.Count -ne 1) {
+  throw "failed atomic publication did not retain exactly the prior journal, backup, and stage: journal=$($jJournal.Count) write=$($jWriteJournal.Count) backup=$($jBackup.Count) stage=$($jStage.Count)"
+}
+if ((Get-Content -Raw -LiteralPath $jJournal[0].FullName) -notmatch '(?m)^phase=prepared$') {
+  throw 'failed atomic publication did not preserve the prior complete prepared journal'
+}
+$jError = Get-Content -Raw -LiteralPath $jState.Stderr
+if ($jError -notmatch 'injected failure before atomic journal publication' -or
+    $jError -notmatch 'recovery journal preserved') {
+  throw 'journal publication failure did not report both publication and recovery status'
+}
+Invoke-Recovery 'failed-journal-publish-recovery' $jJournal[0].FullName
+Assert-Content $jCanonical 'old-version' 'recovery did not restore canonical from prior journal generation'
+Assert-Absent $jJournal[0].FullName 'publication-failure recovery retained journal'
+Assert-Absent $jBackup[0].FullName 'publication-failure recovery retained backup'
+Assert-Absent $jStage[0].FullName 'publication-failure recovery retained stage'
+
 @{
   parentAuthority = 'actual updater parent spawns finalizer and publishes readiness only after child owns parent handle'
   preparedRollback = 'pass'
+  writeSideOnlyJournalRecovery = 'pass'
   oldBackedUpRollback = 'pass'
   newLiveRollback = 'pass'
   committedCleanup = 'pass'
@@ -320,4 +378,6 @@ Assert-Absent $fStage[0].FullName 'later recovery retained stage'
   ordinaryRollback = 'pass'
   rollbackFailurePreservesEvidence = 'pass'
   laterRecoveryAfterRollbackFailure = 'pass'
+  atomicJournalPublishFailurePreservesPriorGeneration = 'pass'
+  laterRecoveryAfterJournalPublishFailure = 'pass'
 } | ConvertTo-Json | Set-Content (Join-Path $ReceiptDirectory 'recovery-matrix.json')

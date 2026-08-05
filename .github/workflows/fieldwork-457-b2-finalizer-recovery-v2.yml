@@ -1,12 +1,10 @@
-name: Fieldwork 457 B2 recoverable finalizer journals v2
+name: Fieldwork 457 B2 atomic journal publication
 
 on:
   pull_request:
     paths:
       - .github/fieldwork/457-b2/finalizer_recovery_v2.ps1
-      - .github/workflows/fieldwork-457-b2-deferred-finalizer.yml
       - .github/workflows/fieldwork-457-b2-finalizer-recovery-v2.yml
-      - crates/uv-windows/src/lib.rs
       - crates/uv-windows/src/update_finalizer.rs
       - crates/uv/src/bin/fieldwork_deferred_update_finalizer.rs
 
@@ -14,29 +12,29 @@ permissions:
   contents: write
 
 concurrency:
-  group: fieldwork-457-b2-finalizer-recovery-v2-${{ github.event.pull_request.number }}
+  group: fieldwork-457-b2-atomic-journal-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 env:
-  EXPERIMENT_BASE: dfcc528fc2ef9b4d829da2a604e194c41342147e
+  EXPERIMENT_BASE: 4928f75fd075bf8cd34ccd635205983131ce79ed
   INPUT_HEAD: ${{ github.event.pull_request.head.sha }}
   SOURCE_BRANCH: ${{ github.head_ref }}
   CI: 1
 
 jobs:
   recovery:
-    name: Windows recoverable finalizer journal matrix
+    name: Windows atomic journal publication and recovery matrix
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
-      - name: Check out exact recovery successor
+      - name: Check out exact atomic-publication successor
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Verify exact base and source fence
+      - name: Verify exact stack base and source fence
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -45,25 +43,23 @@ jobs:
             throw 'Checkout does not match immutable pull-request head'
           }
           if ((git merge-base HEAD $env:EXPERIMENT_BASE) -ne $env:EXPERIMENT_BASE) {
-            throw 'Recovery successor does not descend from exact current finalizer head'
+            throw 'Atomic journal successor does not descend from exact recovery-v2 head'
           }
           $expected = @(
             '.github/fieldwork/457-b2/finalizer_recovery_v2.ps1'
-            '.github/workflows/fieldwork-457-b2-deferred-finalizer.yml'
             '.github/workflows/fieldwork-457-b2-finalizer-recovery-v2.yml'
-            'crates/uv-windows/src/lib.rs'
             'crates/uv-windows/src/update_finalizer.rs'
             'crates/uv/src/bin/fieldwork_deferred_update_finalizer.rs'
           ) | Sort-Object
           $changed = @(git diff --name-only "$env:EXPERIMENT_BASE..HEAD") | Sort-Object
           if (Compare-Object $expected $changed) {
-            throw "Unexpected recovery diff. Expected: $($expected -join ', '); actual: $($changed -join ', ')"
+            throw "Unexpected atomic-journal diff. Expected: $($expected -join ', '); actual: $($changed -join ', ')"
           }
           git diff --check "$env:EXPERIMENT_BASE..HEAD"
           New-Item -ItemType Directory -Force -Path receipt | Out-Null
           @(
-            "recovery_head=$env:INPUT_HEAD"
-            "experiment_base=$env:EXPERIMENT_BASE"
+            "atomic_journal_head=$env:INPUT_HEAD"
+            "recovery_v2_base=$env:EXPERIMENT_BASE"
             "source_branch=$env:SOURCE_BRANCH"
             "runner=$env:RUNNER_OS"
           ) | Set-Content receipt/identity.txt
@@ -75,7 +71,7 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
-          shared-key: fieldwork-457-b2-finalizer-recovery-v2
+          shared-key: fieldwork-457-b2-atomic-journal-publication
           cache-on-failure: true
 
       - name: Format and build recovery driver
@@ -99,14 +95,14 @@ jobs:
             Tee-Object -FilePath receipt/build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Execute recovery matrix
+      - name: Execute atomic publication and recovery matrix
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           & .github/fieldwork/457-b2/finalizer_recovery_v2.ps1 `
             -Helper (Join-Path $env:GITHUB_WORKSPACE 'target/debug/fieldwork_deferred_update_finalizer.exe') `
             -ReceiptDirectory (Join-Path $env:GITHUB_WORKSPACE 'receipt') `
-            -MatrixRoot (Join-Path $env:RUNNER_TEMP 'finalizer-recovery-v2-matrix')
+            -MatrixRoot (Join-Path $env:RUNNER_TEMP 'finalizer-atomic-journal-matrix')
 
       - name: Check affected Windows targets
         shell: pwsh
@@ -133,7 +129,7 @@ jobs:
           git config user.email 'fieldwork-agent@users.noreply.github.com'
           git add crates/uv-windows/src/update_finalizer.rs
           git diff --cached --check
-          git commit -m 'style(windows): format update recovery finalizer'
+          git commit -m 'style(windows): format atomic journal finalizer'
           $sourceHead = git rev-parse HEAD
           Add-Content receipt/identity.txt "formatted_source_head=$sourceHead"
           git push `
@@ -144,7 +140,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
-          name: fieldwork-457-b2-finalizer-recovery-v2
+          name: fieldwork-457-b2-atomic-journal-publication
           path: receipt/
           if-no-files-found: error
           retention-days: 30

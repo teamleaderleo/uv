@@ -34,6 +34,7 @@ fn main() -> ExitCode {
     };
 
     let mut fail_after_backup = false;
+    let mut fail_journal_publish_after_backup = false;
     let mut fail_rollback_after_backup = false;
     let mut ready_path = None;
     while let Some(argument) = args.next() {
@@ -42,6 +43,11 @@ fn main() -> ExitCode {
                 return usage("duplicate --fail-after-backup");
             }
             fail_after_backup = true;
+        } else if argument == "--fail-journal-publish-after-backup" {
+            if fail_journal_publish_after_backup {
+                return usage("duplicate --fail-journal-publish-after-backup");
+            }
+            fail_journal_publish_after_backup = true;
         } else if argument == "--fail-rollback-after-backup" {
             if fail_rollback_after_backup {
                 return usage("duplicate --fail-rollback-after-backup");
@@ -63,8 +69,15 @@ fn main() -> ExitCode {
         }
     }
 
-    if fail_rollback_after_backup && !fail_after_backup {
-        return usage("--fail-rollback-after-backup requires --fail-after-backup");
+    if fail_after_backup && fail_journal_publish_after_backup {
+        return usage(
+            "--fail-after-backup and --fail-journal-publish-after-backup are mutually exclusive",
+        );
+    }
+    if fail_rollback_after_backup && !(fail_after_backup || fail_journal_publish_after_backup) {
+        return usage(
+            "--fail-rollback-after-backup requires an injected post-backup update failure",
+        );
     }
 
     let process_id = match first.to_string_lossy().parse::<u32>() {
@@ -80,6 +93,7 @@ fn main() -> ExitCode {
             &PathBuf::from(replacement),
             uv_windows::UpdateFinalizeOptions {
                 fail_after_backup,
+                fail_journal_publish_after_backup,
                 fail_rollback_after_backup,
                 ready_path,
             },
@@ -106,7 +120,7 @@ fn main() -> ExitCode {
 
 fn usage(message: &str) -> ExitCode {
     eprintln!(
-        "{message}\nusage:\n  fieldwork_deferred_update_finalizer <parent-pid> <canonical> <replacement> [--ready-file <path>] [--fail-after-backup [--fail-rollback-after-backup]]\n  fieldwork_deferred_update_finalizer recover <journal>"
+        "{message}\nusage:\n  fieldwork_deferred_update_finalizer <parent-pid> <canonical> <replacement> [--ready-file <path>] [--fail-after-backup | --fail-journal-publish-after-backup] [--fail-rollback-after-backup]\n  fieldwork_deferred_update_finalizer recover <journal>"
     );
     ExitCode::from(2)
 }
