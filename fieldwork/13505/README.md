@@ -8,28 +8,44 @@ External contact: **not authorized and not performed**
 
 ## Current classification
 
-`REPRODUCER/DESIGN — plausible final-stage dedup regression; Windows execution still required`
+`EXECUTION PREPARED — final-stage dedup regression; Windows baseline/candidate matrix required`
 
 The historical fix intentionally changed `uv python list` to display the queried executable path (`Interpreter::real_executable`) rather than Python's resolved `sys.executable`. That preserves useful information about shims and search-path entries.
 
-The current listing command collects those queried paths and then removes duplicates with an `FxHashSet<PathBuf>`. Rust path equality is lexical and case-sensitive, so two Windows spellings such as `C:\Python312\python.exe` and `c:\python312\python.exe` survive as separate rows even though Windows resolves them to the same path.
+The current listing command collects those queried paths and then removes duplicates with an `FxHashSet<PathBuf>`. Rust path equality is lexical and case-sensitive, so two Windows spellings such as `C:\Python312\python.exe` and `c:\python312\python.exe` survive as separate rows even though Windows resolves their casing equivalently.
 
-## Important semantic boundary
+## Semantic boundary
 
-Do **not** replace the lexical check with file-identity deduplication. The earlier discussion explicitly keeps distinct symlink/search-path entries visible because the path used to reach an interpreter is relevant information. The narrow requirement is:
+Do **not** replace the lexical check with file-identity deduplication. The earlier discussion explicitly keeps distinct symlink, shim, and search-path entries visible because the path used to reach an interpreter is relevant information. The narrow requirement is:
 
-- on Windows, collapse lexical path variants that differ only by Windows case rules;
+- on Windows, collapse queried paths that are equal under Windows ordinal case-insensitive comparison;
 - on non-Windows platforms, preserve current exact path equality;
-- preserve genuinely distinct shim, symlink, and search-path entries.
+- preserve genuinely distinct shim, symlink, and search-path entries;
+- avoid filesystem canonicalization and lossy UTF-8 conversion.
 
-## Candidate test
+## Selected candidate
 
-`candidate-test.patch` sketches a Windows-only regression test that places the same interpreter directory on the search path twice with different ASCII casing and expects one listed interpreter. It also keeps the existing Unix symlink controls unchanged.
+The workspace already enables the `windows` crate's `Win32_Globalization` feature, and the exact pinned `windows` 0.61 API exposes `CompareStringOrdinal(&[u16], &[u16], true)` plus `CSTR_EQUAL`.
 
-## Open implementation question
+`apply_candidate.py` therefore prepares:
 
-A simple ASCII-folded key covers the reported drive/component casing but is not a complete implementation of Windows ordinal case-insensitive comparison for every Unicode path. Before selecting production code, prefer an existing repository/Windows helper or a small wrapper around the Windows ordinal comparison API. Avoid lossy UTF-8 conversion and avoid filesystem canonicalization that erases intentional symlink provenance.
+1. `uv_windows::path_eq_ignore_case`, a lexical UTF-16 ordinal comparison wrapper;
+2. Windows-only seen-path tracking that scans the small set of previously listed queried paths with that helper;
+3. the existing hash-set behavior unchanged on non-Windows platforms;
+4. a direct Unicode/ASCII case control that also preserves a distinct shim path;
+5. an end-to-end extension of `python_list_duplicate_path_entries` that adds case-varied spellings of the same real interpreter directories.
 
-## Stop condition
+The candidate does not canonicalize, resolve, or compare file identity.
 
-No production patch is selected until the regression test fails on a Windows runner and the chosen comparison preserves the existing symlink/shim behavior. This branch is an owned-fork investigation packet, not an upstream contribution claim.
+## Execution contract
+
+A read-only Windows carrier must prove:
+
+- baseline plus the new integration control fails after compiling and running the focused test;
+- candidate direct ordinal-comparison control passes;
+- candidate integration control lists each interpreter once;
+- `cargo fmt --check` and `git diff --check` pass;
+- only the four expected source/test paths change locally;
+- no product source is published by the carrier.
+
+Only a green matrix permits materializing a clean owned-fork source branch. This packet is not an upstream contribution claim.
