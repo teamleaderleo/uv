@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def replace_once(path: Path, old: str, new: str) -> None:
+    content = path.read_text()
+    count = content.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one replacement anchor, found {count}")
+    path.write_text(content.replace(old, new, 1))
+
+
+operations = Path("crates/uv/src/commands/pip/operations.rs")
+replace_once(
+    operations,
+    """                    if let Some(lock_err) =
+                        cause.downcast_ref::<uv_requirements::UvLockfileAsRequirementsError>()
+                    {
+                        return uv_errors::Hint::hints(lock_err);
+                    }
+""",
+    "",
+)
+
+diagnostics = Path("crates/uv/src/commands/diagnostics.rs")
+anchor = "        collect_hint::<ExtrasWithoutSourceError>(cause, &mut hints);\n"
+replace_once(
+    diagnostics,
+    anchor,
+    anchor
+    + "        collect_hint::<uv_requirements::UvLockfileAsRequirementsError>(cause, &mut hints);\n",
+)
+
+tests = Path("crates/uv/tests/pip_install/uv_lock_requirements_hint.rs")
+tests.write_text(
+    tests.read_text()
+    + r'''
+
+#[test]
+fn tool_run_with_requirements_has_dedicated_hint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        "#,
+    )?;
+    context.lock().assert().success();
+
+    context
+        .tool_run()
+        .arg("--with-requirements")
+        .arg("uv.lock")
+        .arg("ruff")
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("The file `uv.lock` appears to be a uv lockfile").and(
+                predicate::str::contains(
+                    "\nhint: Use `uv sync` or `uv export --format requirements-txt` from the owning project",
+                ),
+            ),
+        );
+
+    Ok(())
+}
+'''
+)
