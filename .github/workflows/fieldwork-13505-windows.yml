@@ -91,7 +91,10 @@ jobs:
           cargo test --package uv --test python python_list_duplicate_path_entries --no-default-features --features test-python -- --nocapture
           git diff --check
 
-          $actual = @(git diff --name-only | Sort-Object)
+          $actual = @(
+            git diff --name-only
+            git ls-files --others --exclude-standard
+          ) | Sort-Object
           $expected = @(
             'crates/uv-windows/src/lib.rs',
             'crates/uv-windows/src/path.rs',
