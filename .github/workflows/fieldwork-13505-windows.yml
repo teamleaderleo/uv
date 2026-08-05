@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: teamleaderleo/uv
-          ref: 89eb1dbac9aa018478ded480018faf999097a9ff
+          ref: bef3a851268867f6c85cab49aa998471cc7af873
           path: packet
           persist-credentials: false
 
@@ -66,8 +66,11 @@ jobs:
         shell: pwsh
         run: |
           Push-Location baseline
-          & cargo test --package uv --test python python_list_duplicate_path_entries --no-default-features --features test-python -- --nocapture *> baseline-output.txt
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          & cmd.exe /d /s /c "cargo test --package uv --test python python_list_duplicate_path_entries --no-default-features --features test-python -- --nocapture > baseline-output.txt 2>&1"
           $status = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
           Get-Content baseline-output.txt
           Pop-Location
 
@@ -78,6 +81,9 @@ jobs:
           if ($text -match 'could not compile') {
             throw 'baseline failed during compilation instead of behavioral execution'
           }
+          if ($text -notmatch 'running 1 test') {
+            throw 'baseline failure did not execute exactly one focused test'
+          }
           if ($text -notmatch 'python_list_duplicate_path_entries') {
             throw 'baseline failure did not reach the focused integration test'
           }
@@ -87,8 +93,10 @@ jobs:
         run: |
           Push-Location candidate
           cargo fmt --all -- --check
-          cargo test --package uv --lib windows_path_case_variants_are_deduplicated --no-default-features --features test-python -- --nocapture
-          cargo test --package uv --test python python_list_duplicate_path_entries --no-default-features --features test-python -- --nocapture
+          cargo test --package uv --lib windows_path_case_variants_are_deduplicated --no-default-features --features test-python -- --nocapture 2>&1 | Tee-Object candidate-unit-output.txt
+          if ($LASTEXITCODE -ne 0) { throw 'candidate ordinal unit control failed' }
+          cargo test --package uv --test python python_list_duplicate_path_entries --no-default-features --features test-python -- --nocapture 2>&1 | Tee-Object candidate-integration-output.txt
+          if ($LASTEXITCODE -ne 0) { throw 'candidate integration control failed' }
           git diff --check
 
           $actual = @(
@@ -113,3 +121,15 @@ jobs:
           if ((git -C baseline rev-parse HEAD) -ne '1da26a68629be6ae5fd7f924a7d49ff54763a7df') { throw 'baseline head moved' }
           if ((git -C candidate rev-parse HEAD) -ne '1da26a68629be6ae5fd7f924a7d49ff54763a7df') { throw 'candidate head moved' }
           Write-Host 'uv 13505 Windows baseline/candidate matrix passed'
+
+      - name: Retain Windows execution transcripts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: uv-13505-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            baseline/baseline-output.txt
+            candidate/candidate-unit-output.txt
+            candidate/candidate-integration-output.txt
+          if-no-files-found: warn
+          retention-days: 30
