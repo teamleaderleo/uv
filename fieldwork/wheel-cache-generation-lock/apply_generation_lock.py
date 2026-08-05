@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply cross-platform per-wheel publication locks and a protocol test."""
+"""Apply cross-platform pointer publication locks and a protocol test."""
 
 from pathlib import Path
 import sys
@@ -12,7 +12,19 @@ if text.count(lock_guard) != 4:
     raise SystemExit(
         f"wheel publication lock-site mismatch: expected 4, found {text.count(lock_guard)}"
     )
-text = text.replace(lock_guard, "        let _lock = {")
+
+# The first lock protects source-built, link-only publication. The demonstrated
+# generation split requires both a wheel-entry link and a later .http/.rev pointer,
+# so retain the existing platform behavior for that unrelated cache family and
+# enable the remaining three pointer-producing locks on every platform.
+first_lock = text.index(lock_guard)
+prefix_end = first_lock + len(lock_guard)
+text = text[:prefix_end] + text[prefix_end:].replace(
+    lock_guard,
+    "        let _lock = {",
+)
+if text.count(lock_guard) != 1:
+    raise SystemExit("source-built link-only lock was not preserved exactly once")
 
 old = """#[cfg(test)]
 mod tests {
