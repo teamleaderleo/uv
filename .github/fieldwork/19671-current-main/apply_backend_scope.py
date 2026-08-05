@@ -9,7 +9,9 @@ from pathlib import Path
 SOURCE = Path("crates/uv/src/commands/project/init.rs")
 
 
-def replace_once(text: str, *, name: str, old: str, new: str) -> str:
+def replace_once(
+    text: str, *, name: str, old: str, new: str
+) -> str:
     count = text.count(old)
     if count != 1:
         raise SystemExit(f"{name}: expected one anchor, found {count}")
