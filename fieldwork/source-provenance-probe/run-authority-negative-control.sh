@@ -14,8 +14,7 @@ make_fixture() {
   local case_dir=$1
   local order=$2
 
-  mkdir -p "$case_dir/project" "$case_dir/parent/parent" "$case_dir/child/child"
-  : > "$case_dir/parent/parent/__init__.py"
+  mkdir -p "$case_dir/project" "$case_dir/parent" "$case_dir/child/child"
   : > "$case_dir/child/child/__init__.py"
 
   cat > "$case_dir/child/pyproject.toml" <<'EOF'
@@ -34,15 +33,69 @@ EOF
 name = "parent"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["child"]
-
-[tool.uv.sources]
-child = { path = "../child" }
+dynamic = ["dependencies"]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = []
+build-backend = "backend"
+backend-path = ["."]
 EOF
+
+  cat > "$case_dir/parent/backend.py" <<'PY'
+from __future__ import annotations
+
+import csv
+import io
+import zipfile
+from pathlib import Path
+
+NAME = "parent"
+VERSION = "0.1.0"
+DIST_INFO = f"{NAME}-{VERSION}.dist-info"
+METADATA = """Metadata-Version: 2.3
+Name: parent
+Version: 0.1.0
+Requires-Python: >=3.12
+Requires-Dist: child @ file:../child
+"""
+WHEEL = """Wheel-Version: 1.0
+Generator: uv-fieldwork-authority-backend
+Root-Is-Purelib: true
+Tag: py3-none-any
+"""
+
+
+def _write_metadata(root: Path) -> str:
+    dist_info = root / DIST_INFO
+    dist_info.mkdir(parents=True, exist_ok=True)
+    (dist_info / "METADATA").write_text(METADATA)
+    (dist_info / "WHEEL").write_text(WHEEL)
+    return DIST_INFO
+
+
+def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+    return _write_metadata(Path(metadata_directory))
+
+
+def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+    wheel_name = f"{NAME}-{VERSION}-py3-none-any.whl"
+    wheel_path = Path(wheel_directory) / wheel_name
+    members = {
+        "parent/__init__.py": "",
+        f"{DIST_INFO}/METADATA": METADATA,
+        f"{DIST_INFO}/WHEEL": WHEEL,
+    }
+    record = io.StringIO()
+    writer = csv.writer(record, lineterminator="\n")
+    for path in members:
+        writer.writerow((path, "", ""))
+    writer.writerow((f"{DIST_INFO}/RECORD", "", ""))
+    members[f"{DIST_INFO}/RECORD"] = record.getvalue()
+    with zipfile.ZipFile(wheel_path, "w", zipfile.ZIP_DEFLATED) as wheel:
+        for path, content in members.items():
+            wheel.writestr(path, content)
+    return wheel_name
+PY
 
   if [[ "$order" == parent-first ]]; then
     dependencies='dependencies = ["parent", "child"]'
@@ -64,6 +117,26 @@ $dependencies
 parent = { path = "../parent" }
 child = { path = "$child_absolute" }
 EOF
+
+  # Prove that the lower-authority parent metadata actually carries the
+  # relative direct URL under test. A nested tool.uv.sources table is not a
+  # sufficient fixture because build metadata may omit it entirely.
+  python3 - "$case_dir/parent" "$case_dir/preflight-metadata" <<'PY'
+import pathlib
+import sys
+
+parent = pathlib.Path(sys.argv[1])
+metadata_root = pathlib.Path(sys.argv[2])
+sys.path.insert(0, str(parent))
+import backend
+
+dist_info = backend.prepare_metadata_for_build_wheel(metadata_root)
+metadata = (metadata_root / dist_info / "METADATA").read_text()
+expected = "Requires-Dist: child @ file:../child"
+if expected not in metadata.splitlines():
+    raise SystemExit(f"missing exact relative metadata requirement: {expected!r}\n{metadata}")
+print(expected)
+PY
 }
 
 record_lock() {
@@ -85,13 +158,17 @@ child = packages["child"]
 parent = packages["parent"]
 source = child.get("source", {})
 requires_dist = parent.get("metadata", {}).get("requires-dist", [])
-parent_child = next((item for item in requires_dist if item.get("name") == "child"), {})
+parent_child = next((item for item in requires_dist if item.get("name") == "child"), None)
+if parent_child is None:
+    raise SystemExit("authority control is invalid: parent metadata has no child requirement")
+
 
 def path_value(mapping):
     for key in ("editable", "directory", "path"):
         if key in mapping:
             return key, mapping[key]
     return None, None
+
 
 def normalized(value):
     if not value:
@@ -104,15 +181,20 @@ def normalized(value):
     except ValueError:
         return f"<ABS>/{path.name}"
 
+
 source_kind, source_path = path_value(source)
 metadata_kind, metadata_path = path_value(parent_child)
+if source_path is None or metadata_path is None:
+    raise SystemExit(
+        "authority control is invalid: expected local path in both child source and parent metadata"
+    )
 print(
     json.dumps(
         {
             "uv_version": uv_version,
             "dependency_order": order,
             "root_child_declaration": "absolute",
-            "parent_child_declaration": "relative",
+            "parent_child_declaration": "relative-generated-metadata",
             "child_source_kind": source_kind,
             "child_source_path": source_path,
             "child_source_normalized": normalized(source_path),
@@ -150,7 +232,7 @@ records = [json.loads(line) for line in records_path.read_text().splitlines() if
 lines = [
     f"# UV source-authority negative control — {records[0]['uv_version']}",
     "",
-    "Root declaration: **absolute**. Parent declaration: **relative**.",
+    "Root declaration: **absolute**. Generated parent metadata: **relative**.",
     "",
     "| dependency order | child source | parent metadata |",
     "| --- | --- | --- |",
@@ -160,9 +242,7 @@ for record in records:
     source += " ABSOLUTE" if record["child_source_absolute"] else " RELATIVE"
     metadata = f"{record['parent_metadata_kind']}={record['parent_metadata_normalized']}"
     metadata += " ABSOLUTE" if record["parent_metadata_absolute"] else " RELATIVE"
-    lines.append(
-        f"| {record['dependency_order']} | `{source}` | `{metadata}` |"
-    )
+    lines.append(f"| {record['dependency_order']} | `{source}` | `{metadata}` |")
 
 source_values = {
     (
