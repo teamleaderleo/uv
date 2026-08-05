@@ -103,6 +103,8 @@ jobs:
         working-directory: source
         run: |
           set -euo pipefail
+          implicit_test=add_implicit_index_to_workspace_member_updates_root
+          named_test=add_named_index_to_workspace_member_keeps_source_local
           rustup component add rustfmt
           cargo fmt --all
           cargo fmt --all --check
@@ -112,10 +114,14 @@ jobs:
           git diff -- crates/uv/src/commands/project/add.rs crates/uv/tests/project/edit.rs \
             >../artifacts/results/root-authority.patch
           cargo check -p uv
-          cargo test -p uv --test project \
-            add_implicit_index_to_workspace_member_updates_root -- --exact --nocapture
-          cargo test -p uv --test project \
-            add_named_index_to_workspace_member_keeps_source_local -- --exact --nocapture
+          cargo test -p uv --test it "$implicit_test" -- --list \
+            | tee /tmp/uv-20678-implicit-tests.txt
+          grep -F "$implicit_test: test" /tmp/uv-20678-implicit-tests.txt
+          cargo test -p uv --test it "$implicit_test" -- --nocapture
+          cargo test -p uv --test it "$named_test" -- --list \
+            | tee /tmp/uv-20678-named-tests.txt
+          grep -F "$named_test: test" /tmp/uv-20678-named-tests.txt
+          cargo test -p uv --test it "$named_test" -- --nocapture
           cargo build --bin uv
           cp target/debug/uv ../artifacts/bin/uv-candidate
 
