@@ -17,7 +17,7 @@ jobs:
       UV_BASE: 2ac6b42a3572a474de2edc2bee824c13631636ec
       SOURCE_BASE: 49e2fc5c821bb69a528308a036b17446bb5ab5a6
       SOURCE_COMMIT: 51c9fe109f037d084fd17647dc78a6451c2938f2
-      SOURCE_BRANCH: candidate/uv-lock-requirements-hint-current
+      SOURCE_BRANCH: candidate/uv-lock-requirements-hint-current-v2
     steps:
       - name: Check out carrier
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -34,13 +34,79 @@ jobs:
           EOF
           diff -u "$RUNNER_TEMP/expected-carrier-files.txt" "$RUNNER_TEMP/carrier-files.txt"
 
-      - name: Apply accepted source to current main
+      - name: Apply and refine accepted source on current main
         shell: bash
         run: |
           set -euo pipefail
           git checkout --detach "$UV_BASE"
           git diff "$SOURCE_BASE" "$SOURCE_COMMIT" -- . ':(exclude)Cargo.lock' > "$RUNNER_TEMP/source-without-lock.patch"
           git apply --3way --whitespace=error-all "$RUNNER_TEMP/source-without-lock.patch"
+          python - <<'PY'
+          from pathlib import Path
+
+          operations = Path("crates/uv/src/commands/pip/operations.rs")
+          content = operations.read_text()
+          old = '''                    if let Some(lock_err) =
+                        cause.downcast_ref::<uv_requirements::UvLockfileAsRequirementsError>()
+                    {
+                        return uv_errors::Hint::hints(lock_err);
+                    }
+          '''
+          if content.count(old) != 1:
+              raise SystemExit("expected one pip-local hint registration")
+          operations.write_text(content.replace(old, "", 1))
+
+          diagnostics = Path("crates/uv/src/commands/diagnostics.rs")
+          content = diagnostics.read_text()
+          anchor = "        collect_hint::<ExtrasWithoutSourceError>(cause, &mut hints);\n"
+          addition = anchor + (
+              "        collect_hint::<uv_requirements::UvLockfileAsRequirementsError>(cause, &mut hints);\n"
+          )
+          if content.count(anchor) != 1:
+              raise SystemExit("expected one central hint anchor")
+          diagnostics.write_text(content.replace(anchor, addition, 1))
+
+          tests = Path("crates/uv/tests/pip_install/uv_lock_requirements_hint.rs")
+          tests.write_text(
+              tests.read_text()
+              + r'''
+
+          #[test]
+          fn tool_run_with_requirements_has_dedicated_hint() -> Result<()> {
+              let context = uv_test::test_context!("3.12");
+              context.temp_dir.child("pyproject.toml").write_str(
+                  r#"
+                  [project]
+                  name = "project"
+                  version = "0.1.0"
+                  requires-python = ">=3.12"
+                  dependencies = []
+                  "#,
+              )?;
+              context.lock().assert().success();
+
+              context
+                  .tool_run()
+                  .arg("--with-requirements")
+                  .arg("uv.lock")
+                  .arg("ruff")
+                  .assert()
+                  .failure()
+                  .stderr(
+                      predicate::str::contains("Failed to resolve `--with` requirement")
+                          .and(predicate::str::contains(
+                              "The file `uv.lock` appears to be a uv lockfile",
+                          ))
+                          .and(predicate::str::contains(
+                              "\nhint: Use `uv sync` or `uv export --format requirements-txt` from the owning project",
+                          )),
+                  );
+
+              Ok(())
+          }
+          ''',
+          )
+          PY
           git add -N crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
           cargo fmt --all
           cargo check -p uv-requirements -p uv
@@ -49,7 +115,7 @@ jobs:
           Cargo.lock
           crates/uv-requirements/Cargo.toml
           crates/uv-requirements/src/specification.rs
-          crates/uv/src/commands/pip/operations.rs
+          crates/uv/src/commands/diagnostics.rs
           crates/uv/tests/pip_install/main.rs
           crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
           EOF
@@ -87,7 +153,7 @@ jobs:
             Cargo.lock \
             crates/uv-requirements/Cargo.toml \
             crates/uv-requirements/src/specification.rs \
-            crates/uv/src/commands/pip/operations.rs \
+            crates/uv/src/commands/diagnostics.rs \
             crates/uv/tests/pip_install/main.rs \
             crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
           git commit -m "fix: hint when uv lockfiles are used as requirements"
