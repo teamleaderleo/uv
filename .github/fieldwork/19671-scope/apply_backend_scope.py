@@ -14,7 +14,9 @@ from pathlib import Path
 SOURCE = Path("crates/uv/src/commands/project/init.rs")
 
 
-def replace_span(text: str, *, name: str, start: str, end: str, replacement: str) -> str:
+def replace_span(
+    text: str, *, name: str, start: str, end: str, replacement: str
+) -> str:
     start_count = text.count(start)
     end_count = text.count(end)
     if start_count != 1 or end_count != 1:
