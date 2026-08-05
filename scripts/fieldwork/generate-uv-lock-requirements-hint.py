@@ -74,7 +74,7 @@ impl Hint for UvLockfileAsRequirementsError {
     fn hints(&self) -> Hints<'_> {
         match &self.kind {
             UvLockfileKind::Project => Hints::from(
-                "Use `uv sync` from the project directory, or `uv export --format requirements-txt` to create a requirements file",
+                "Use `uv sync` or `uv export --format requirements-txt` from the owning project, or provide requirements directly instead",
             ),
             UvLockfileKind::Script(script) => Hints::from(format!(
                 "Use `uv run {0}` to run the script, or `uv export --script {0} --format requirements-txt` to create a requirements file",
@@ -278,7 +278,7 @@ fn project_uv_lock_has_dedicated_error_and_hint() -> Result<()> {
                     "Caused by: Couldn't parse requirement in `uv.lock` at position 0",
                 ))
                 .and(predicate::str::contains(
-                    "\nhint: Use `uv sync` from the project directory",
+                    "\nhint: Use `uv sync` or `uv export --format requirements-txt` from the owning project",
                 )),
         );
 
@@ -340,6 +340,38 @@ fn valid_requirements_file_wins_over_script_lock_name() -> Result<()> {
         .stderr(
             predicate::str::contains("does not contain any dependencies")
                 .and(predicate::str::contains("appears to be a uv lockfile").not()),
+        );
+
+    Ok(())
+}
+
+#[test]
+fn orphaned_script_lock_keeps_original_parse_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("action.py").write_str(
+        "# /// script\n# dependencies = []\n# ///\n\nprint('hello')\n",
+    )?;
+    context
+        .lock()
+        .arg("--script")
+        .arg("action.py")
+        .assert()
+        .success();
+    std::fs::remove_file(context.temp_dir.child("action.py").path())?;
+
+    context
+        .pip_install()
+        .arg("-r")
+        .arg("action.py.lock")
+        .arg("--strict")
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains(
+                "Couldn't parse requirement in `action.py.lock` at position 0",
+            )
+            .and(predicate::str::contains("appears to be a uv lockfile").not())
+            .and(predicate::str::contains("\nhint:").not()),
         );
 
     Ok(())
