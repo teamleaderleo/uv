@@ -114,14 +114,30 @@ jobs:
           git diff -- crates/uv/src/commands/project/add.rs crates/uv/tests/project/edit.rs \
             >../artifacts/results/root-authority.patch
           cargo check -p uv
+
           cargo test -p uv --test it "$implicit_test" -- --list \
-            | tee /tmp/uv-20678-implicit-tests.txt
-          grep -F "$implicit_test: test" /tmp/uv-20678-implicit-tests.txt
-          cargo test -p uv --test it "$implicit_test" -- --nocapture
+            2>&1 | tee ../artifacts/results/native-implicit-list.txt
+          grep -F "$implicit_test: test" ../artifacts/results/native-implicit-list.txt
           cargo test -p uv --test it "$named_test" -- --list \
-            | tee /tmp/uv-20678-named-tests.txt
-          grep -F "$named_test: test" /tmp/uv-20678-named-tests.txt
-          cargo test -p uv --test it "$named_test" -- --nocapture
+            2>&1 | tee ../artifacts/results/native-named-list.txt
+          grep -F "$named_test: test" ../artifacts/results/native-named-list.txt
+
+          set +e
+          cargo test -p uv --test it "$implicit_test" -- --nocapture \
+            2>&1 | tee ../artifacts/results/native-implicit.txt
+          implicit_status=${PIPESTATUS[0]}
+          cargo test -p uv --test it "$named_test" -- --nocapture \
+            2>&1 | tee ../artifacts/results/native-named.txt
+          named_status=${PIPESTATUS[0]}
+          set -e
+          {
+            echo "implicit_status=$implicit_status"
+            echo "named_status=$named_status"
+          } >../artifacts/results/native-status.txt
+          if [[ "$implicit_status" -ne 0 || "$named_status" -ne 0 ]]; then
+            exit 1
+          fi
+
           cargo build --bin uv
           cp target/debug/uv ../artifacts/bin/uv-candidate
 
