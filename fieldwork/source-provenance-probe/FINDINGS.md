@@ -1,144 +1,154 @@
 # UV local-source provenance research
 
-Date: 2026-08-02  
-State: `FINDING CONFIRMED; UPSTREAM CONTACT NOT AUTHORIZED`  
-Internal carrier: `teamleaderleo/uv#11`  
-Exact upstream base: `astral-sh/uv@79bbface771210df216b738e9bdc7df95e5a9e6b`
+Date: 2026-08-05  
+State: `FINDING CONFIRMED; REPAIR POLICY UNDER TEST; UPSTREAM CONTACT NOT AUTHORIZED`
 
-## Finding
+Internal carriers:
 
-The regression reported as “relative editable paths become absolute through a transitive Poetry dependency” is a broader **local-directory provenance regression**.
+- baseline release matrix: `teamleaderleo/uv#11`;
+- exact draft #304 validation: `teamleaderleo/uv#27`;
+- generalized non-editable candidate: `teamleaderleo/uv#37`;
+- absolute-root authority negative control: `teamleaderleo/uv#38`.
 
-When a root project explicitly selects a local child directory with a relative `[tool.uv.sources]` path, and a local Poetry parent emits an equivalent path dependency in generated metadata, uv 0.10.10 and 0.12.1 serialize the child as an absolute path in both places below:
+Exact original upstream base:
+`astral-sh/uv@79bbface771210df216b738e9bdc7df95e5a9e6b`.
 
-1. the child package's own `source` entry;
-2. the parent's `[package.metadata].requires-dist` entry for that child.
+## Confirmed finding
 
-This occurs for both:
+The regression reported as “relative editable paths become absolute through a transitive Poetry dependency” is a broader local-directory provenance regression.
 
-- editable root/Poetry directory dependencies;
-- non-editable root/Poetry directory dependencies.
+When a root project explicitly selects a local child directory through a relative `[tool.uv.sources]` path, and a local parent emits an equivalent absolute path dependency in generated metadata, uv 0.10.10 and 0.12.1 serialize the child as absolute in both of these places:
 
-The same matrix remains relative on uv 0.10.0.
+1. the child package `source` entry;
+2. the parent package `requires-dist` metadata entry.
 
-## Exact version matrix
+The same failure occurs for editable and non-editable local directories. uv 0.10.0 keeps both representations relative.
 
-Workflow: `Fieldwork UV source provenance`  
-Corrected run: `30752194973`  
+## Release matrix
+
+Workflow run: `30752194973`  
 Generated merge tested: `00ee711a4e5ac995adf70529f3fa66357f067967`
 
-| uv | editable records absolute | non-editable records absolute | root dependency-order invariant | cold/warm invariant |
-| --- | ---: | ---: | --- | --- |
-| 0.10.0 | 0/4 source; 0/4 metadata | 0/4 source; 0/4 metadata | yes | yes |
-| 0.10.10 | 4/4 source; 4/4 metadata | 4/4 source; 4/4 metadata | yes | yes |
-| 0.12.1 | 4/4 source; 4/4 metadata | 4/4 source; 4/4 metadata | yes | yes |
+| uv | editable | non-editable | dependency order | cold/warm |
+| --- | --- | --- | --- | --- |
+| 0.10.0 | 0/4 source and 0/4 metadata absolute | 0/4 source and 0/4 metadata absolute | invariant | invariant |
+| 0.10.10 | 4/4 source and 4/4 metadata absolute | 4/4 source and 4/4 metadata absolute | invariant | invariant |
+| 0.12.1 | 4/4 source and 4/4 metadata absolute | 4/4 source and 4/4 metadata absolute | invariant | invariant |
 
-Each version ran these eight observations:
+Artifact receipts:
 
-- editable, parent-first, cold;
-- editable, parent-first, warm;
-- editable, child-first, cold;
-- editable, child-first, warm;
-- non-editable, parent-first, cold;
-- non-editable, parent-first, warm;
-- non-editable, child-first, cold;
-- non-editable, child-first, warm.
+| uv | artifact | ZIP SHA-256 |
+| --- | ---: | --- |
+| 0.10.0 | `8834793365` | `a909d2961705d226cadbf08587b8ced337ef81557203480c885fa6f8541d2941` |
+| 0.10.10 | `8834792931` | `5dccfdfaa039aecc71c87c66ac86deb2e9d3420e6790d7b85bd66e12578f8256` |
+| 0.12.1 | `8834793219` | `58cac6f794e65adc8194869cb7423139035a9671f16348217953f8a5bdb72d4b` |
 
-The corrected probe normalizes each disposable case root before comparing outputs. The tested fixture therefore does **not** demonstrate dependency-order or cache-state nondeterminism. The earlier completion-order hypothesis remains a separate unproven risk, not part of the confirmed claim.
+The corrected probe normalizes each disposable case root before comparing outputs. None of the executed matrices demonstrates dependency-order or cache-state nondeterminism.
 
-## Receipts
+## Exact active-draft boundary
 
-### uv 0.10.0
+Public issue `astral-sh/uv#20477` is represented by private draft `astral-sh/uv-dev#304` at exact head `675839b0b1b1c66ee3b02139e1237094722ec2b2`.
 
-- job: `91508081313`
-- result: success
-- package source paths: `0/8` absolute
-- parent metadata paths: `0/8` absolute
-- artifact: `8834793365`
-- artifact ZIP SHA-256: `a909d2961705d226cadbf08587b8ced337ef81557203480c885fa6f8541d2941`
+Exact-draft execution:
 
-Representative result:
+- carrier: `teamleaderleo/uv#27`;
+- tested carrier head: `1f7a809966f0f7689ba0245ec20215ee83ceb8d3`;
+- workflow run: `30930801134`;
+- job: `92064683893`;
+- artifact: `8903364962`;
+- artifact ZIP SHA-256: `4260448eb9334622e737435d55e33ebb39addfb2c1bb2f73b675cba5eff1b3c7`.
 
-```text
-editable=../child
-noneditable directory=../child
-parent metadata directory=../child
-```
+Result:
 
-### uv 0.10.10
+| mode | source | parent metadata |
+| --- | --- | --- |
+| editable, 4 observations | all relative | all relative |
+| non-editable, 4 observations | all absolute | all absolute |
 
-- job: `91508081303`
-- result: success
-- package source paths: `8/8` absolute
-- parent metadata paths: `8/8` absolute
-- artifact: `8834792931`
-- artifact ZIP SHA-256: `5dccfdfaa039aecc71c87c66ac86deb2e9d3420e6790d7b85bd66e12578f8256`
+The draft therefore repairs the reported editable case but not the ordinary non-editable sibling.
 
-Representative result:
+An early retained copy failed to compile because it lacked a semicolon. The currently retained exact draft includes that semicolon and builds. The syntax failure is historical context, not a current defect in head `675839b0...`.
 
-```text
-editable=<CASE>/child ABSOLUTE
-noneditable directory=<CASE>/child ABSOLUTE
-parent metadata directory=<CASE>/child ABSOLUTE
-```
+## Why draft #304 stops at editability
 
-### uv 0.12.1
+The draft preserves a relative selected URL only through an editable-specific merge branch. Its lock serializer can repair generated metadata only when the selected distribution still carries a relative `VerbatimUrl`.
 
-- job: `91508081306`
-- result: success
-- package source paths: `8/8` absolute
-- parent metadata paths: `8/8` absolute
-- artifact: `8834793219`
-- artifact ZIP SHA-256: `58cac6f794e65adc8194869cb7423139035a9671f16348217953f8a5bdb72d4b`
+In the non-editable collision, URL selection can discard the relative spelling first. The serializer then sees an absolute selected distribution, excludes it from `relative_sources`, and has no evidence from which to recover the root project’s relative intent.
 
-Representative result is identical in classification to 0.10.10.
+This demonstrates that resource identity, install mode, and presentation authority are separate properties.
 
-## Source-level interpretation
+## Generalized fork candidate
 
-PR `astral-sh/uv#18176`, merged as `eec8048a0b1c88cb69227cd9f77ce28c2fc61c88`, intentionally changed path serialization to preserve whether each `VerbatimUrl` was originally relative or absolute.
+Fork-only draft `teamleaderleo/uv#37` tests one narrow policy after exact draft #304:
 
-The relevant rule became:
+- for equivalent local directories, retain the relative spelling over the absolute spelling;
+- merge editability independently so an editable declaration still wins;
+- leave non-directory URLs unchanged.
 
-```text
-relativize only when !url.was_given_absolute()
-```
+Exact successful execution:
 
-That is sound when one source spelling has one provenance. It becomes lossy when multiple requirements point at the same local resource:
+- tested head: `de93ecfc9e71af8ec15383beb287d320f38426ce`;
+- generated merge: `56fb08842285b31145b61a0cc029618e12514269`;
+- workflow run: `30969832800`;
+- job: `92191555060`;
+- artifact: `8916217206`;
+- artifact ZIP SHA-256: `a631be2fb7773030e5e031b759e49e48f95c86973d528301e616890fd8f0ba97`.
 
-- explicit root configuration says `../child` and therefore carries relative user intent;
-- generated build-backend metadata describes the same child as an absolute `file://` URL;
-- resource deduplication has to select one operational source, but the surviving URL also carries presentation provenance;
-- lock serialization then treats the generated absolute spelling as authoritative.
+The candidate produced zero absolute package-source records and zero absolute parent-metadata records across all eight editable, non-editable, order, and cache observations. All editable package sources remained editable.
 
-The broader invariant is:
+The first execution attempt failed before compilation because the stored patch hunk declared 42 new lines while containing 39. The header was repaired without changing candidate logic.
 
-> Resource identity and serialization provenance are different properties. When equivalent local resources are merged, explicit project configuration should determine portable presentation; generated metadata should not silently replace that intent.
+## Why the passing candidate is not yet accepted
 
-This is not fundamentally an “editable” rule. Editability changes install behavior, but both editable and non-editable local directories cross the same provenance boundary.
+PR `astral-sh/uv#18176` intentionally established that explicit absolute path inputs must remain absolute. It includes a mixed relative-and-absolute lock snapshot and a dedicated absolute constraint-dependency test.
 
-## Active Astral draft and remaining gap
+Meanwhile, `Manifest` retains separate project requirements and lookahead requirements, and `RequestedRequirements` carries a `direct` flag. `requirements_no_overrides` flattens those inputs before `Urls::from_manifest` merges equivalent resources. URL merging can inspect spelling and editability, but it no longer knows which spelling came from explicit root configuration, local-project source configuration, generated backend metadata, a constraint, or an override.
 
-Issue `astral-sh/uv#20477` is already assigned into draft `astral-sh/uv-dev#304`, head `675839b0b1b1c66ee3b02139e1237094722ec2b2`.
+Therefore “relative always wins” may be only a fixture-passing heuristic. The stronger candidate invariant is:
 
-The draft:
+> For equivalent resources, the higher-authority explicit declaration should determine serialized path intent, while install mode is merged independently.
 
-- preserves a selected relative directory source while serializing matching generated metadata;
-- changes same-resource URL replacement for the reported editable/non-editable collision;
-- adds one regression fixture for the editable Poetry case.
+The correct authority categories and precedence are not yet proven.
 
-The implementation's lock-serialization set includes relative directory sources generally, so it may repair the non-editable result too. However, the current test and framing do not demonstrate that. A credible validation should add the non-editable sibling and require both package source and parent metadata to remain relative.
+## Current negative control
 
-## Next research probes
+Fork-only draft `teamleaderleo/uv#38` constructs this conflict:
 
-These are separate from the confirmed finding and should not be claimed without execution:
+- the root project explicitly declares `child` through an absolute path;
+- a local parent declares the same `child` through a relative `tool.uv.sources` path;
+- both root dependency orders are executed;
+- package source and parent metadata are recorded separately.
 
-1. Apply draft #304 and run this complete editable/non-editable matrix.
-2. Test a local archive/path distribution, not only a directory distribution.
-3. Test equivalent directory aliases through symlinks, because resource equality can use `is_same_file` while provenance repair keys exact install paths.
-4. Test conflicting explicit provenance: one root source relative and another explicit declaration absolute for the same resource.
-5. Compare `uv.lock` and `pylock.toml` so the provenance invariant is consistent across serializers.
-6. Create delayed metadata fixtures before claiming asynchronous lookahead completion can alter the selected spelling.
+A result that converts the root’s explicit absolute declaration to relative invalidates the spelling-only candidate and justifies an authority-aware merge model.
+
+## Directions not worth pursuing yet
+
+- **Blind serializer relativization:** cannot distinguish generated absolute metadata from intentional absolute input after origin is lost.
+- **Metadata-only repair:** leaves the child package source absolute.
+- **Poetry-version hunting:** a dependency-free backend reproduced the metadata shape, so Poetry is not required for the mechanism.
+- **Async nondeterminism claims:** every executed order/cache matrix is invariant; a delayed multi-parent fixture is required.
+- **Archives, symlinks, and `pylock.toml` first:** they are dominated by the unresolved ordinary-directory authority rule.
+- **A competing upstream patch:** Astral already has an active draft, and upstream contact is not authorized.
+
+## Adjacent but separate UV work
+
+- `astral-sh/uv#16299` concerns local wheel paths exported to `pylock.toml` and needs an explicit export policy.
+- `astral-sh/uv#19091` concerns rebasing transitive local paths in `uv pip compile`.
+- `astral-sh/uv#18443` concerns parser and model support for relative local Git sources.
+
+These share a portability theme but do not share the same demonstrated mechanism.
+
+## Remaining probes
+
+After the authority negative control:
+
+1. decide whether URL collection needs an explicit authority-bearing wrapper;
+2. add the non-editable sibling to the upstream-style regression fixture;
+3. test constraints and overrides as competing authorities;
+4. test symlink aliases where resource equality uses filesystem identity;
+5. compare `uv.lock` and `pylock.toml` presentation behavior;
+6. test existing-lock relocking, Windows drive/UNC paths, and local archives.
 
 ## External-contact state
 
-No Astral issue, pull request, comment, review, reaction, email, or other upstream contact was created. `teamleaderleo/uv#11` is an internal fork-only execution carrier and remains draft.
+No Astral issue, pull request, comment, review, reaction, email, or other upstream interaction has been created. All execution and repair candidates remain in the fork.
