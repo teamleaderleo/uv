@@ -51,18 +51,22 @@ jobs:
           EOF
           diff -u "$RUNNER_TEMP/expected-source-files.txt" "$RUNNER_TEMP/source-files.txt"
           git diff --check
-          git diff --stat | tee "$RUNNER_TEMP/source-stat.txt"
-          git diff > "$RUNNER_TEMP/source.patch"
 
       - name: Install Rust components
         shell: bash
         run: rustup component add rustfmt clippy
 
-      - name: Run formatting and compile gates
+      - name: Format and compile generated source
         shell: bash
         run: |
           set -euo pipefail
+          cargo fmt --all
+          git diff --name-only | sort > "$RUNNER_TEMP/source-files-formatted.txt"
+          diff -u "$RUNNER_TEMP/expected-source-files.txt" "$RUNNER_TEMP/source-files-formatted.txt"
+          git diff --check
           cargo fmt --all --check
+          git diff --stat | tee "$RUNNER_TEMP/source-stat.txt"
+          git diff > "$RUNNER_TEMP/source.patch"
           cargo check -p uv-requirements -p uv
 
       - name: Run focused integration controls
@@ -109,6 +113,7 @@ jobs:
           path: |
             ${{ runner.temp }}/carrier-files.txt
             ${{ runner.temp }}/source-files.txt
+            ${{ runner.temp }}/source-files-formatted.txt
             ${{ runner.temp }}/source-stat.txt
             ${{ runner.temp }}/source.patch
             ${{ runner.temp }}/focused-tests.txt
