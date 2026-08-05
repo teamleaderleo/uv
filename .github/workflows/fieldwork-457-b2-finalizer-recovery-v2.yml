@@ -74,6 +74,85 @@ jobs:
           shared-key: fieldwork-457-b2-atomic-journal-publication
           cache-on-failure: true
 
+      - name: Apply write-side path authority hardening
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          from pathlib import Path
+
+          source_path = Path("crates/uv-windows/src/update_finalizer.rs")
+          source = source_path.read_text()
+          function_marker = "fn validate_journal_paths(journal_path: &Path, journal: &UpdateJournal) -> io::Result<()> {\n"
+          prefix, body = source.split(function_marker, 1)
+          if "let write_path = journal_write_path(journal_path)?;" not in body:
+              directory_anchor = "    })?;\n\n    for (name, path) in [\n"
+              assert body.count(directory_anchor) >= 1
+              body = body.replace(
+                  directory_anchor,
+                  "    })?;\n    let write_path = journal_write_path(journal_path)?;\n\n    for (name, path) in [\n",
+                  1,
+              )
+              alias_anchor = "        || journal_path == journal.backup\n"
+              assert body.count(alias_anchor) == 1
+              body = body.replace(
+                  alias_anchor,
+                  alias_anchor
+                  + "        || write_path == journal.canonical\n"
+                  + "        || write_path == journal.staged\n"
+                  + "        || write_path == journal.backup\n",
+                  1,
+              )
+              source_path.write_text(prefix + function_marker + body)
+          else:
+              for expected in (
+                  "write_path == journal.canonical",
+                  "write_path == journal.staged",
+                  "write_path == journal.backup",
+              ):
+                  assert expected in body
+
+          driver_path = Path(".github/fieldwork/457-b2/finalizer_recovery_v2.ps1")
+          driver = driver_path.read_text()
+          control_name = "write-side-alias"
+          if control_name not in driver:
+              insertion = r'''
+          # A journal must not authorize its `.write` sibling as canonical, stage, or backup.
+          # Otherwise recovery cleanup can delete the file it just accepted or restored as canonical.
+          $writeAlias = Join-Path $MatrixRoot 'write-side-alias'
+          New-Item -ItemType Directory -Force -Path $writeAlias | Out-Null
+          $waCanonical = Join-Path $writeAlias '.uv.exe.journal.write'
+          $waStaged = Join-Path $writeAlias '.uv.exe.stage'
+          $waBackup = Join-Path $writeAlias '.uv.exe.backup'
+          $waJournal = Join-Path $writeAlias '.uv.exe.journal'
+          Set-Content -NoNewline -LiteralPath $waCanonical -Value 'protected-canonical'
+          Set-Content -NoNewline -LiteralPath $waStaged -Value 'new-version'
+          Write-Journal $waJournal 'committed' $waCanonical $waStaged $waBackup
+          Invoke-Recovery 'write-side-alias' $waJournal 42
+          Assert-Content $waCanonical 'protected-canonical' 'write-side alias journal deleted canonical authority'
+          if (-not (Test-Path -LiteralPath $waJournal)) {
+            throw 'invalid write-side alias journal was deleted'
+          }
+
+          '''
+              anchor = "# Normal live commit still keeps canonical old until parent exit, then installs new.\n"
+              assert driver.count(anchor) == 1
+              driver_path.write_text(driver.replace(anchor, insertion + anchor, 1))
+
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $changed = @(git diff --name-only) | Sort-Object
+          if ($changed.Count -gt 0) {
+            $expected = @(
+              '.github/fieldwork/457-b2/finalizer_recovery_v2.ps1'
+              'crates/uv-windows/src/update_finalizer.rs'
+            ) | Sort-Object
+            if (Compare-Object $expected $changed) {
+              throw "Unexpected path-authority patch output: $($changed -join ', ')"
+            }
+          }
+          git diff --check
+
       - name: Format and build recovery driver
         shell: pwsh
         run: |
@@ -83,12 +162,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo fmt --all 2>&1 | Tee-Object -FilePath receipt/fmt.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $formatted = @(git diff --name-only)
-          if ($formatted.Count -gt 0 -and (
-              $formatted.Count -ne 1 -or
-              $formatted[0] -ne 'crates/uv-windows/src/update_finalizer.rs'
-          )) {
-            throw "Unexpected rustfmt output: $($formatted -join ', ')"
+          $changed = @(git diff --name-only) | Sort-Object
+          if ($changed.Count -gt 0) {
+            $expected = @(
+              '.github/fieldwork/457-b2/finalizer_recovery_v2.ps1'
+              'crates/uv-windows/src/update_finalizer.rs'
+            ) | Sort-Object
+            if (Compare-Object $expected $changed) {
+              throw "Unexpected formatted source output: $($changed -join ', ')"
+            }
           }
           git diff --check
           cargo build -p uv --bin fieldwork_deferred_update_finalizer --features self-update 2>&1 |
@@ -113,25 +195,31 @@ jobs:
             Tee-Object -FilePath receipt/check.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Publish exact formatted source
+      - name: Publish exact hardened and formatted source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $formatted = @(git diff --name-only)
-          if ($formatted.Count -eq 0) {
-            Add-Content receipt/identity.txt "formatted_source_head=$(git rev-parse HEAD)"
+          $changed = @(git diff --name-only) | Sort-Object
+          if ($changed.Count -eq 0) {
+            Add-Content receipt/identity.txt "hardened_source_head=$(git rev-parse HEAD)"
             exit 0
           }
-          if ($formatted.Count -ne 1 -or $formatted[0] -ne 'crates/uv-windows/src/update_finalizer.rs') {
-            throw "Unexpected source residue before publication: $($formatted -join ', ')"
+          $expected = @(
+            '.github/fieldwork/457-b2/finalizer_recovery_v2.ps1'
+            'crates/uv-windows/src/update_finalizer.rs'
+          ) | Sort-Object
+          if (Compare-Object $expected $changed) {
+            throw "Unexpected source residue before publication: $($changed -join ', ')"
           }
           git config user.name 'Fieldwork Agent'
           git config user.email 'fieldwork-agent@users.noreply.github.com'
-          git add crates/uv-windows/src/update_finalizer.rs
+          git add `
+            .github/fieldwork/457-b2/finalizer_recovery_v2.ps1 `
+            crates/uv-windows/src/update_finalizer.rs
           git diff --cached --check
-          git commit -m 'style(windows): format atomic journal finalizer'
+          git commit -m 'fix(windows): reject write-side recovery aliases'
           $sourceHead = git rev-parse HEAD
-          Add-Content receipt/identity.txt "formatted_source_head=$sourceHead"
+          Add-Content receipt/identity.txt "hardened_source_head=$sourceHead"
           git push `
             --force-with-lease="refs/heads/$env:SOURCE_BRANCH`:$env:INPUT_HEAD" `
             origin "HEAD:refs/heads/$env:SOURCE_BRANCH"
