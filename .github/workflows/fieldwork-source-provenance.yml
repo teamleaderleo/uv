@@ -4,14 +4,21 @@ on:
   push:
     branches:
       - research/source-provenance-order-20260802
+    paths:
+      - .github/workflows/fieldwork-source-provenance.yml
+      - fieldwork/source-provenance-probe/run.sh
   pull_request:
     branches:
       - main
       - research/upstream-79bb-base
     paths:
       - .github/workflows/fieldwork-source-provenance.yml
-      - fieldwork/source-provenance-probe/**
+      - fieldwork/source-provenance-probe/run.sh
   workflow_dispatch:
+
+concurrency:
+  group: fieldwork-source-provenance-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
