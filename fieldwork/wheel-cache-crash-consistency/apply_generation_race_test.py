@@ -18,6 +18,8 @@ new = """#[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
+    use uv_cache::Cache;
+
     use super::*;
 
     #[tokio::test]
