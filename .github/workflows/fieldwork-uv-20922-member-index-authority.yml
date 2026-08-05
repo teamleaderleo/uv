@@ -21,7 +21,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PUBLIC_BASE: 92b7185783b56e8ad1dbe0bb7600432708f2c9fb
+  SOURCE_BASE: 4518994c9c8e3975c0f35db49841f7f5a6d0a577
+  PR_BASE: 92b7185783b56e8ad1dbe0bb7600432708f2c9fb
   PUBLIC_CANDIDATE: 64d6042d4b30830042d3a402d0b2e953730a8ede
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
@@ -55,15 +56,17 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts/bin artifacts/results
           test "$(git -C source rev-parse HEAD)" = "$PUBLIC_CANDIDATE"
-          test "$(git -C source merge-base "$PUBLIC_BASE" "$PUBLIC_CANDIDATE")" = "$PUBLIC_BASE"
-          git -C source diff --check "$PUBLIC_BASE" "$PUBLIC_CANDIDATE"
-          git -C source diff --name-only "$PUBLIC_BASE" "$PUBLIC_CANDIDATE" | sort \
+          test "$(git -C source merge-base "$SOURCE_BASE" "$PUBLIC_CANDIDATE")" = "$SOURCE_BASE"
+          test "$(git -C source merge-base "$PR_BASE" "$PUBLIC_CANDIDATE")" = "$SOURCE_BASE"
+          git -C source diff --check "$SOURCE_BASE" "$PUBLIC_CANDIDATE"
+          git -C source diff --name-only "$SOURCE_BASE" "$PUBLIC_CANDIDATE" | sort \
             >artifacts/results/public-candidate-files.txt
-          git -C source diff "$PUBLIC_BASE" "$PUBLIC_CANDIDATE" \
+          git -C source diff "$SOURCE_BASE" "$PUBLIC_CANDIDATE" \
             >artifacts/results/public-candidate.patch
           bash -n carrier/.github/fieldwork/20922-member-index-authority/matrix.sh
           {
-            echo "public_base=$PUBLIC_BASE"
+            echo "source_base=$SOURCE_BASE"
+            echo "pr_base=$PR_BASE"
             echo "public_candidate=$PUBLIC_CANDIDATE"
             echo "carrier_head=$(git -C carrier rev-parse HEAD)"
           } >artifacts/results/identity.txt
@@ -74,12 +77,12 @@ jobs:
           cache-base: uv-20922-member-index-authority
           cache-target: debug
 
-      - name: Build exact base
+      - name: Build exact source base
         working-directory: source
         run: |
           set -euo pipefail
-          git checkout --detach "$PUBLIC_BASE"
-          test "$(git rev-parse HEAD)" = "$PUBLIC_BASE"
+          git checkout --detach "$SOURCE_BASE"
+          test "$(git rev-parse HEAD)" = "$SOURCE_BASE"
           cargo build --bin uv
           cp target/debug/uv ../artifacts/bin/uv-base
 
