@@ -18,6 +18,8 @@ Is “prefer the relative spelling for equivalent local directories” the under
 
 However, `requirements_no_overrides` flattens lookahead requirements, project requirements, and constraints into a single iterator. `Urls::from_manifest` consumes only the resulting `Requirement` values. When it finds two URLs for the same resource, it can inspect spelling and editability, but it no longer knows whether each spelling came from explicit root configuration, direct local-project configuration, generated backend metadata, or a constraint.
 
+PR `astral-sh/uv#18176` makes intentional absolute input a hard compatibility constraint for this research. Its `lock_relative_and_absolute_paths` snapshot keeps one local dependency relative while changing a sibling declared by an absolute path to an absolute lockfile source and absolute `requires-dist` entry. The same PR adds a dedicated absolute constraint-dependency test whose stated requirement is that the user-provided absolute path remain absolute. Therefore “make local paths portable whenever possible” is not the accepted upstream policy; preserving the author’s explicit absolute-versus-relative choice is.
+
 ## Interpretation
 
 The resolver currently merges three independent properties through one replaceable `VerbatimParsedUrl`:
@@ -42,7 +44,11 @@ Not accepted. “Direct” identifies how the parent was requested, not necessar
 
 ### Keep the universal relative-wins rule without a negative control
 
-Not acceptable. UV deliberately preserves explicitly absolute path inputs elsewhere through `VerbatimUrl::was_given_absolute()`. A repair that silently converts intentional absolute input would trade one provenance loss for another.
+Not acceptable. UV deliberately preserves explicitly absolute path inputs through `VerbatimUrl::was_given_absolute()`, and PR #18176 tests that behavior directly. A repair that silently converts intentional absolute input would trade one provenance loss for another.
+
+### Infer authority during lock serialization
+
+Rejected as the primary repair. Once URL collection has discarded the losing spelling and its origin, serialization sees an operational directory and a surviving `VerbatimUrl`, not the evidence needed to distinguish explicit absolute intent from generated absolute metadata. The authority decision must either occur during collection or be carried through it.
 
 ## Next smallest negative control
 
