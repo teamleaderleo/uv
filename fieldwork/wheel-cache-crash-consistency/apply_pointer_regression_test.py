@@ -28,7 +28,7 @@ fn recovers_missing_local_wheel_archive() -> Result<()> {
                         .path()
                         .parent()
                         .and_then(std::path::Path::file_name)
-                        .is_some_and(|name| name == "tomli-2.0.1.dist-info")
+                        .is_some_and(|name| name.to_string_lossy() == "tomli-2.0.1.dist-info")
             })
             .expect("cached tomli metadata");
 
