@@ -2,8 +2,6 @@ name: Fieldwork uv lock requirements hint validation
 
 on:
   pull_request:
-    branches:
-      - fieldwork/uv-lock-requirements-hint-base
   workflow_dispatch:
 
 permissions:
