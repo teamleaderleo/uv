@@ -52,6 +52,7 @@ jobs:
           crates/uv/src/commands/diagnostics.rs
           crates/uv/tests/pip_install/main.rs
           crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
+          crates/uv/tests/tool/tool_run.rs
           EOF
           diff -u "$RUNNER_TEMP/expected-source-files.txt" "$RUNNER_TEMP/source-files.txt"
           git diff --check
@@ -65,7 +66,10 @@ jobs:
           set -euo pipefail
           cargo test --locked -p uv --test pip_install --features test-python,test-pypi \
             uv_lock_requirements_hint -- --nocapture \
-            | tee "$RUNNER_TEMP/focused-tests.txt"
+            | tee "$RUNNER_TEMP/pip-focused-tests.txt"
+          cargo test --locked -p uv --test tool --features test-python,test-pypi \
+            tool_run_with_requirements_has_dedicated_hint -- --nocapture \
+            | tee "$RUNNER_TEMP/tool-focused-test.txt"
 
       - name: Run affected Clippy gates
         shell: bash
@@ -89,7 +93,8 @@ jobs:
             crates/uv-requirements/src/specification.rs \
             crates/uv/src/commands/diagnostics.rs \
             crates/uv/tests/pip_install/main.rs \
-            crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
+            crates/uv/tests/pip_install/uv_lock_requirements_hint.rs \
+            crates/uv/tests/tool/tool_run.rs
           git commit -m "fix: hint when uv lockfiles are used as requirements"
           git rev-parse HEAD | tee "$RUNNER_TEMP/source-head.txt"
           git rev-parse HEAD^{tree} | tee "$RUNNER_TEMP/source-tree.txt"
@@ -107,7 +112,8 @@ jobs:
             ${{ runner.temp }}/source-files-published.txt
             ${{ runner.temp }}/source-stat.txt
             ${{ runner.temp }}/source.patch
-            ${{ runner.temp }}/focused-tests.txt
+            ${{ runner.temp }}/pip-focused-tests.txt
+            ${{ runner.temp }}/tool-focused-test.txt
             ${{ runner.temp }}/source-head.txt
             ${{ runner.temp }}/source-tree.txt
           if-no-files-found: warn
