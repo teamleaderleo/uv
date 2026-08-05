@@ -46,7 +46,7 @@ jobs:
           cat > "$RUNNER_TEMP/expected-source-files.txt" <<'EOF'
           crates/uv-requirements/Cargo.toml
           crates/uv-requirements/src/specification.rs
-          crates/uv/src/commands/diagnostics.rs
+          crates/uv/src/commands/pip/operations.rs
           crates/uv/tests/pip_install/main.rs
           crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
           EOF
@@ -92,7 +92,7 @@ jobs:
           git add \
             crates/uv-requirements/Cargo.toml \
             crates/uv-requirements/src/specification.rs \
-            crates/uv/src/commands/diagnostics.rs \
+            crates/uv/src/commands/pip/operations.rs \
             crates/uv/tests/pip_install/main.rs \
             crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
           git commit -m "fix: hint when uv lockfiles are used as requirements"
