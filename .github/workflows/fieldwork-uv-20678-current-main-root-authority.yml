@@ -86,7 +86,7 @@ jobs:
           bash carrier/.github/fieldwork/20678-current-main/replay_matrix.sh \
             artifacts/bin/uv-base base artifacts/results
 
-      - name: Apply and verify candidate
+      - name: Apply candidate
         working-directory: source
         run: |
           set -euo pipefail
@@ -98,15 +98,19 @@ jobs:
             | sort >../expected-files.txt
           git diff --name-only | sort >../changed-files.txt
           diff -u ../expected-files.txt ../changed-files.txt
-          git diff -- crates/uv/src/commands/project/add.rs crates/uv/tests/project/edit.rs \
-            >../artifacts/results/root-authority.patch
 
-      - name: Format, compile, and run source-native controls
+      - name: Materialize formatted candidate and run source-native controls
         working-directory: source
         run: |
           set -euo pipefail
           rustup component add rustfmt
+          cargo fmt --all
           cargo fmt --all --check
+          git diff --check
+          git diff --name-only | sort >../formatted-files.txt
+          diff -u ../expected-files.txt ../formatted-files.txt
+          git diff -- crates/uv/src/commands/project/add.rs crates/uv/tests/project/edit.rs \
+            >../artifacts/results/root-authority.patch
           cargo check -p uv
           cargo test -p uv --test project \
             add_implicit_index_to_workspace_member_updates_root -- --exact --nocapture
