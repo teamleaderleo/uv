@@ -1,0 +1,144 @@
+name: Fieldwork uv workspace root index authority
+
+on:
+  push:
+    branches:
+      - fieldwork/20678-current-main-root-authority
+    paths:
+      - .github/fieldwork/20678-current-main/**
+      - .github/workflows/fieldwork-uv-20678-current-main-root-authority.yml
+  pull_request:
+    paths:
+      - .github/fieldwork/20678-current-main/**
+      - .github/workflows/fieldwork-uv-20678-current-main-root-authority.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-uv-20678-root-authority-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PUBLIC_MAIN: 49e2fc5c821bb69a528308a036b17446bb5ab5a6
+  ADD_BLOB: 32a2f64147199ea643cf44253d4f3fd6858c90d5
+  EDIT_BLOB: 32474463a19428b4c7c542ef780f4c787a532ded
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  base-vs-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out controlled carrier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: carrier
+
+      - name: Check out exact public main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: astral-sh/uv
+          ref: ${{ env.PUBLIC_MAIN }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+
+      - name: Verify identities and carrier syntax
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/bin artifacts/results
+          test "$(git -C source rev-parse HEAD)" = "$PUBLIC_MAIN"
+          test "$(git -C source hash-object crates/uv/src/commands/project/add.rs)" = "$ADD_BLOB"
+          test "$(git -C source hash-object crates/uv/tests/project/edit.rs)" = "$EDIT_BLOB"
+          python3 -m py_compile carrier/.github/fieldwork/20678-current-main/apply_root_authority.py
+          bash -n carrier/.github/fieldwork/20678-current-main/replay_matrix.sh
+          {
+            echo "public_main=$PUBLIC_MAIN"
+            echo "add_blob=$ADD_BLOB"
+            echo "edit_blob=$EDIT_BLOB"
+            echo "carrier_head=$(git -C carrier rev-parse HEAD)"
+          } >artifacts/results/identity.txt
+
+      - name: Install Rust toolchain
+        uses: moonrepo/setup-rust@abb2d32350334249b178c401e5ec5836e0cd88d3
+        with:
+          cache-base: uv-20678-current-main-root-authority
+          cache-target: debug
+
+      - name: Build exact base
+        working-directory: source
+        run: |
+          set -euo pipefail
+          cargo build --bin uv
+          cp target/debug/uv ../artifacts/bin/uv-base
+
+      - name: Run exact base replay matrix
+        run: |
+          set -euo pipefail
+          bash carrier/.github/fieldwork/20678-current-main/replay_matrix.sh \
+            artifacts/bin/uv-base base artifacts/results
+
+      - name: Apply and verify candidate
+        working-directory: source
+        run: |
+          set -euo pipefail
+          python3 ../carrier/.github/fieldwork/20678-current-main/apply_root_authority.py
+          git diff --check
+          printf '%s\n' \
+            crates/uv/src/commands/project/add.rs \
+            crates/uv/tests/project/edit.rs \
+            | sort >../expected-files.txt
+          git diff --name-only | sort >../changed-files.txt
+          diff -u ../expected-files.txt ../changed-files.txt
+          git diff -- crates/uv/src/commands/project/add.rs crates/uv/tests/project/edit.rs \
+            >../artifacts/results/root-authority.patch
+
+      - name: Format, compile, and run source-native controls
+        working-directory: source
+        run: |
+          set -euo pipefail
+          rustup component add rustfmt
+          cargo fmt --all --check
+          cargo check -p uv
+          cargo test -p uv --test project \
+            add_implicit_index_to_workspace_member_updates_root -- --exact --nocapture
+          cargo test -p uv --test project \
+            add_named_index_to_workspace_member_keeps_source_local -- --exact --nocapture
+          cargo build --bin uv
+          cp target/debug/uv ../artifacts/bin/uv-candidate
+
+      - name: Run candidate replay matrix
+        run: |
+          set -euo pipefail
+          bash carrier/.github/fieldwork/20678-current-main/replay_matrix.sh \
+            artifacts/bin/uv-candidate candidate artifacts/results
+
+      - name: Verify bounded source diff and cleanup
+        if: always()
+        run: |
+          set -euo pipefail
+          if test -d source/.git; then
+            git -C source diff --check
+            git -C source diff --name-only | sort >final-files.txt
+            if test -f expected-files.txt; then
+              diff -u expected-files.txt final-files.txt
+            fi
+          fi
+          test -z "$(git -C carrier status --short --untracked-files=no)"
+
+      - name: Upload exact root-authority evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-20678-current-main-root-authority-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/results/
+          if-no-files-found: warn
+          retention-days: 30
