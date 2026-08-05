@@ -1,0 +1,141 @@
+name: Fieldwork uv lock requirements hint validation
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      EXPECTED_BASE: 49e2fc5c821bb69a528308a036b17446bb5ab5a6
+      SOURCE_BRANCH: candidate/uv-lock-requirements-hint
+    steps:
+      - name: Check out validation carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git merge-base "$EXPECTED_BASE" HEAD)" = "$EXPECTED_BASE"
+          git diff --name-only "$EXPECTED_BASE"...HEAD | sort > "$RUNNER_TEMP/carrier-files.txt"
+          cat > "$RUNNER_TEMP/expected-carrier-files.txt" <<'EOF'
+          .github/workflows/fieldwork-uv-lock-requirements-hint.yml
+          scripts/fieldwork/generate-uv-lock-requirements-hint.py
+          EOF
+          diff -u "$RUNNER_TEMP/expected-carrier-files.txt" "$RUNNER_TEMP/carrier-files.txt"
+          cp scripts/fieldwork/generate-uv-lock-requirements-hint.py "$RUNNER_TEMP/generate.py"
+
+      - name: Generate exact candidate from upstream base
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$EXPECTED_BASE"
+          python "$RUNNER_TEMP/generate.py"
+          git add -N crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
+          git diff --name-only | sort > "$RUNNER_TEMP/source-files.txt"
+          cat > "$RUNNER_TEMP/expected-source-files.txt" <<'EOF'
+          Cargo.lock
+          crates/uv-requirements/Cargo.toml
+          crates/uv-requirements/src/specification.rs
+          crates/uv/src/commands/pip/operations.rs
+          crates/uv/tests/pip_install/main.rs
+          crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
+          EOF
+          diff -u "$RUNNER_TEMP/expected-source-files.txt" "$RUNNER_TEMP/source-files.txt"
+          git diff --check
+
+      - name: Install Rust components
+        shell: bash
+        run: rustup component add rustfmt clippy
+
+      - name: Format and compile generated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff --name-only | sort > "$RUNNER_TEMP/source-files-formatted.txt"
+          diff -u "$RUNNER_TEMP/expected-source-files.txt" "$RUNNER_TEMP/source-files-formatted.txt"
+          git diff --check
+          cargo fmt --all --check
+          git diff --stat | tee "$RUNNER_TEMP/source-stat.txt"
+          git diff > "$RUNNER_TEMP/source.patch"
+          cargo check --locked -p uv-requirements -p uv
+
+      - name: Run focused integration controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p uv --test pip_install --features test-python,test-pypi \
+            uv_lock_requirements_hint -- --nocapture \
+            | tee "$RUNNER_TEMP/focused-tests.txt"
+
+      - name: Run affected clippy gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy --locked -p uv-requirements -p uv --tests \
+            --features test-python,test-pypi -- -D warnings
+
+      - name: Publish one clean source commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          mapfile -t source_files < <(git diff --name-only | sort)
+          printf '%s\n' "${source_files[@]}" | tee "$RUNNER_TEMP/source-files-published.txt"
+          if [[ "${#source_files[@]}" -ne 6 ]]; then
+            echo "Expected six source files, found ${#source_files[@]}" >&2
+            exit 1
+          fi
+          diff -u "$RUNNER_TEMP/expected-source-files.txt" "$RUNNER_TEMP/source-files-published.txt"
+          git config user.name "fieldwork-validation"
+          git config user.email "fieldwork-validation@users.noreply.github.com"
+          git add \
+            Cargo.lock \
+            crates/uv-requirements/Cargo.toml \
+            crates/uv-requirements/src/specification.rs \
+            crates/uv/src/commands/pip/operations.rs \
+            crates/uv/tests/pip_install/main.rs \
+            crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
+          git commit -m "fix: hint when uv lockfiles are used as requirements"
+          source_head="$(git rev-parse HEAD)"
+          source_tree="$(git rev-parse HEAD^{tree})"
+          printf '%s\n' "$source_head" | tee "$RUNNER_TEMP/source-head.txt"
+          printf '%s\n' "$source_tree" | tee "$RUNNER_TEMP/source-tree.txt"
+          commit_count="$(git rev-list --count "$EXPECTED_BASE"..HEAD)"
+          if [[ "$commit_count" != 1 ]]; then
+            echo "Expected one source commit, found $commit_count" >&2
+            exit 1
+          fi
+          if ! git diff --quiet "$EXPECTED_BASE"..HEAD -- .github scripts; then
+            echo "Source commit crossed the carrier boundary" >&2
+            git diff --name-only "$EXPECTED_BASE"..HEAD -- .github scripts >&2
+            exit 1
+          fi
+          git push --force origin "HEAD:refs/heads/$SOURCE_BRANCH"
+
+      - name: Retain validation receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: uv-lock-requirements-hint-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/carrier-files.txt
+            ${{ runner.temp }}/source-files.txt
+            ${{ runner.temp }}/source-files-formatted.txt
+            ${{ runner.temp }}/source-files-published.txt
+            ${{ runner.temp }}/source-stat.txt
+            ${{ runner.temp }}/source.patch
+            ${{ runner.temp }}/focused-tests.txt
+            ${{ runner.temp }}/source-head.txt
+            ${{ runner.temp }}/source-tree.txt
+          if-no-files-found: warn
+          retention-days: 14
