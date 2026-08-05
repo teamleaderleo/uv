@@ -33,7 +33,7 @@ replace_once(
 replace_once(
     specification,
     "use uv_requirements_txt::{RequirementsTxt, RequirementsTxtRequirement, SourceCache};\n",
-    "use uv_requirements_txt::{\n    RequirementsTxt, RequirementsTxtFileError, RequirementsTxtRequirement, SourceCache,\n};\n",
+    "use uv_requirements_txt::{\n    RequirementsTxt, RequirementsTxtFileError, RequirementsTxtRequirement, SourceCache,\n};\nuse uv_resolver::{Lock, LockParseError};\n",
 )
 replace_once(
     specification,
@@ -44,6 +44,7 @@ replace_once(
 enum UvLockfileKind {
     Project,
     Script(PathBuf),
+    Other,
 }
 
 /// A uv lockfile was passed through a requirements-file input.
@@ -80,6 +81,9 @@ impl Hint for UvLockfileAsRequirementsError {
                 "Use `uv run {0}` to run the script, or `uv export --script {0} --format requirements-txt` to create a requirements file",
                 script.user_display(),
             )),
+            UvLockfileKind::Other => Hints::from(
+                "Use the uv command that created this lockfile, or provide requirements directly instead",
+            ),
         }
     }
 }
@@ -91,7 +95,15 @@ enum SourceRole {
 }
 
 fn uv_lockfile_kind(path: &Path) -> Option<UvLockfileKind> {
-    if !path.is_file() {
+    let contents = fs_err::read_to_string(path).ok()?;
+    if !matches!(
+        Lock::from_toml(&contents),
+        Ok(_)
+            | Err(
+                LockParseError::UnsupportedVersion { .. }
+                    | LockParseError::UnparsableVersion { .. }
+            )
+    ) {
         return None;
     }
 
@@ -99,16 +111,17 @@ fn uv_lockfile_kind(path: &Path) -> Option<UvLockfileKind> {
         return Some(UvLockfileKind::Project);
     }
 
-    if path.extension() != Some(OsStr::new("lock")) {
-        return None;
+    if path.extension() == Some(OsStr::new("lock")) {
+        let script_path = path.with_file_name(path.file_stem()?);
+        if let Ok(contents) = fs_err::read(&script_path)
+            && Pep723Metadata::parse(&contents)
+                .is_ok_and(|metadata| metadata.is_some())
+        {
+            return Some(UvLockfileKind::Script(script_path));
+        }
     }
 
-    let script_path = path.with_file_name(path.file_stem()?);
-    let contents = fs_err::read(&script_path).ok()?;
-    Pep723Metadata::parse(&contents)
-        .ok()
-        .flatten()
-        .map(|_| UvLockfileKind::Script(script_path))
+    Some(UvLockfileKind::Other)
 }
 
 #[derive(Debug, Default, Clone)]
@@ -346,7 +359,36 @@ fn valid_requirements_file_wins_over_script_lock_name() -> Result<()> {
 }
 
 #[test]
-fn orphaned_script_lock_keeps_original_parse_error() -> Result<()> {
+fn script_shaped_non_lock_keeps_original_parse_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("action.py").write_str(
+        "# /// script\n# dependencies = []\n# ///\n\nprint('hello')\n",
+    )?;
+    context
+        .temp_dir
+        .child("action.py.lock")
+        .write_str("version = 1\n")?;
+
+    context
+        .pip_install()
+        .arg("-r")
+        .arg("action.py.lock")
+        .arg("--strict")
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains(
+                "Couldn't parse requirement in `action.py.lock` at position 0",
+            )
+            .and(predicate::str::contains("appears to be a uv lockfile").not())
+            .and(predicate::str::contains("\nhint:").not()),
+        );
+
+    Ok(())
+}
+
+#[test]
+fn orphaned_script_lock_has_generic_hint() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context.temp_dir.child("action.py").write_str(
         "# /// script\n# dependencies = []\n# ///\n\nprint('hello')\n",
@@ -367,11 +409,10 @@ fn orphaned_script_lock_keeps_original_parse_error() -> Result<()> {
         .assert()
         .failure()
         .stderr(
-            predicate::str::contains(
-                "Couldn't parse requirement in `action.py.lock` at position 0",
-            )
-            .and(predicate::str::contains("appears to be a uv lockfile").not())
-            .and(predicate::str::contains("\nhint:").not()),
+            predicate::str::contains("The file `action.py.lock` appears to be a uv lockfile")
+                .and(predicate::str::contains(
+                    "\nhint: Use the uv command that created this lockfile",
+                )),
         );
 
     Ok(())
