@@ -95,7 +95,7 @@ pub use spawn::spawn_child;
         """use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
-use windows::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+use windows::Win32::Globalization::{CompareStringOrdinal, CSTR_EQUAL};
 
 /// Compare two Windows paths using ordinal case-insensitive string semantics.
 ///
@@ -167,8 +167,9 @@ fn insert_seen_path<'path>(
 
 #[cfg(all(test, windows))]
 mod tests {
-    use super::insert_seen_path;
     use std::path::Path;
+
+    use super::insert_seen_path;
 
     #[test]
     fn windows_path_case_variants_are_deduplicated() {
@@ -176,15 +177,15 @@ mod tests {
 
         assert!(insert_seen_path(
             &mut seen_paths,
-            Path::new(r"C:\München\Python\python.exe")
+            Path::new(r"C:\München\Python\python.exe"),
         ));
         assert!(!insert_seen_path(
             &mut seen_paths,
-            Path::new(r"c:\MÜNCHEN\python\PYTHON.EXE")
+            Path::new(r"c:\MÜNCHEN\python\PYTHON.EXE"),
         ));
         assert!(insert_seen_path(
             &mut seen_paths,
-            Path::new(r"C:\Shims\python.exe")
+            Path::new(r"C:\Shims\python.exe"),
         ));
     }
 }
