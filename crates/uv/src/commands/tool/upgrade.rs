@@ -437,15 +437,6 @@ async fn upgrade_tool(
             let extra_build_requires =
                 LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
                     .into_inner();
-            let resolution = tool_lock.to_resolution(
-                Some(name),
-                target_interpreter,
-                python_platform,
-                &settings.resolver.build_options,
-            )?;
-            let hash_strategy =
-                HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
-            let site_packages = SitePackages::from_environment(environment.environment())?;
             let tags = resolution_tags(
                 None,
                 python_platform,
