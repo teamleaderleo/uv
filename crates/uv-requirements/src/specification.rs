@@ -28,6 +28,8 @@
 //!   `source_trees`.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -45,15 +47,97 @@ use uv_distribution_types::{
     IndexUrl, NameRequirementSpecification, UnresolvedRequirement,
     UnresolvedRequirementSpecification,
 };
+use uv_errors::{Hint, Hints};
 use uv_fs::{CWD, Simplified};
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pypi_types::PyProjectToml;
 use uv_redacted::DisplaySafeUrl;
-use uv_requirements_txt::{RequirementsTxt, RequirementsTxtRequirement, SourceCache};
+use uv_requirements_txt::{
+    RequirementsTxt, RequirementsTxtFileError, RequirementsTxtRequirement, SourceCache,
+};
+use uv_resolver::{Lock, LockParseError};
 use uv_scripts::{OverrideDependency, Pep723Metadata};
 use uv_warnings::warn_user;
 
 use crate::{RequirementsSource, SourceTree};
+
+#[derive(Debug, Clone, Copy)]
+enum UvLockfileKind {
+    Project,
+    Script,
+    Other,
+}
+
+/// A uv lockfile was passed through a requirements-file input.
+#[derive(Debug)]
+pub struct UvLockfileAsRequirementsError {
+    path: PathBuf,
+    kind: UvLockfileKind,
+    source: RequirementsTxtFileError,
+}
+
+impl fmt::Display for UvLockfileAsRequirementsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "The file `{}` appears to be a uv lockfile, but requirements must be specified in `requirements.txt` format",
+            self.path.user_display(),
+        )
+    }
+}
+
+impl std::error::Error for UvLockfileAsRequirementsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+impl Hint for UvLockfileAsRequirementsError {
+    fn hints(&self) -> Hints<'_> {
+        match self.kind {
+            UvLockfileKind::Project => Hints::from(
+                "Use `uv sync` or `uv export --format requirements-txt` from the owning project, or provide requirements directly instead",
+            ),
+            UvLockfileKind::Script => Hints::from(
+                "Use `uv run <script>` to run the corresponding script, or `uv export --script <script> --format requirements-txt` to create a requirements file",
+            ),
+            UvLockfileKind::Other => Hints::from(
+                "Use the uv command that created this lockfile, or provide requirements directly instead",
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SourceRole {
+    Requirement,
+    Other,
+}
+
+fn uv_lockfile_kind(path: &Path, contents: Option<&str>) -> Option<UvLockfileKind> {
+    let contents = contents?;
+    if !matches!(
+        Lock::from_toml(contents),
+        Ok(_) | Err(LockParseError::UnsupportedVersion { .. })
+    ) {
+        return None;
+    }
+
+    if path.file_name() == Some(OsStr::new("uv.lock")) {
+        return Some(UvLockfileKind::Project);
+    }
+
+    if path.extension() == Some(OsStr::new("lock")) {
+        let script_path = path.with_file_name(path.file_stem()?);
+        if let Ok(contents) = fs_err::read(&script_path)
+            && Pep723Metadata::parse(&contents).is_ok_and(|metadata| metadata.is_some())
+        {
+            return Some(UvLockfileKind::Script);
+        }
+    }
+
+    Some(UvLockfileKind::Other)
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct RequirementsSpecification {
@@ -100,7 +184,13 @@ impl RequirementsSpecification {
         source: &RequirementsSource,
         client_builder: &BaseClientBuilder<'_>,
     ) -> Result<Self> {
-        Self::from_source_with_cache(source, client_builder, &mut SourceCache::default()).await
+        Self::from_source_with_cache(
+            source,
+            client_builder,
+            SourceRole::Requirement,
+            &mut SourceCache::default(),
+        )
+        .await
     }
 
     /// Create a [`RequirementsSpecification`] from PEP 723 script metadata.
@@ -252,6 +342,7 @@ impl RequirementsSpecification {
     async fn from_source_with_cache(
         source: &RequirementsSource,
         client_builder: &BaseClientBuilder<'_>,
+        role: SourceRole,
         cache: &mut SourceCache,
     ) -> Result<Self> {
         Ok(match source {
@@ -273,7 +364,26 @@ impl RequirementsSpecification {
                 }
 
                 let requirements_txt =
-                    RequirementsTxt::parse_with_cache(path, &*CWD, client_builder, cache).await?;
+                    match RequirementsTxt::parse_with_cache(path, &*CWD, client_builder, cache)
+                        .await
+                    {
+                        Ok(requirements_txt) => requirements_txt,
+                        Err(source) => {
+                            if matches!(role, SourceRole::Requirement)
+                                && let Some(kind) = uv_lockfile_kind(
+                                    path,
+                                    cache.get(path.as_path()).map(String::as_str),
+                                )
+                            {
+                                return Err(anyhow::Error::new(UvLockfileAsRequirementsError {
+                                    path: path.clone(),
+                                    kind,
+                                    source,
+                                }));
+                            }
+                            return Err(source.into());
+                        }
+                    };
 
                 if requirements_txt == RequirementsTxt::default() {
                     warn_user!(
@@ -537,7 +647,13 @@ impl RequirementsSpecification {
         // Resolve sources into specifications so we know their `source_tree`.
         let mut requirement_sources = Vec::new();
         for source in requirements {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source = Self::from_source_with_cache(
+                source,
+                client_builder,
+                SourceRole::Requirement,
+                &mut cache,
+            )
+            .await?;
             requirement_sources.push(source);
         }
 
@@ -593,7 +709,9 @@ impl RequirementsSpecification {
         // Read all constraints, treating both requirements _and_ constraints as constraints.
         // Overrides are ignored.
         for source in constraints {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source =
+                Self::from_source_with_cache(source, client_builder, SourceRole::Other, &mut cache)
+                    .await?;
             for entry in source.requirements {
                 match entry.requirement {
                     UnresolvedRequirement::Named(requirement) => {
@@ -633,7 +751,9 @@ impl RequirementsSpecification {
         // Read all overrides, treating both requirements _and_ overrides as overrides.
         // Constraints are ignored.
         for source in overrides {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source =
+                Self::from_source_with_cache(source, client_builder, SourceRole::Other, &mut cache)
+                    .await?;
             spec.overrides.extend(source.requirements);
             spec.overrides.extend(source.overrides);
             spec.override_dependencies
@@ -660,7 +780,9 @@ impl RequirementsSpecification {
 
         // Collect excludes.
         for source in excludes {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source =
+                Self::from_source_with_cache(source, client_builder, SourceRole::Other, &mut cache)
+                    .await?;
             for req_spec in source.requirements {
                 match req_spec.requirement {
                     UnresolvedRequirement::Named(requirement) => {

@@ -1408,6 +1408,11 @@ impl uv_errors::Hint for Error {
                     if let Some(extra_err) = cause.downcast_ref::<ExtrasWithoutSourceError>() {
                         return uv_errors::Hint::hints(extra_err);
                     }
+                    if let Some(lock_err) =
+                        cause.downcast_ref::<uv_requirements::UvLockfileAsRequirementsError>()
+                    {
+                        return uv_errors::Hint::hints(lock_err);
+                    }
                 }
                 uv_errors::Hints::none()
             }
