@@ -1,119 +1,80 @@
-# Wheel cache crash-consistency boundary
+# uv extracted-wheel cache recovery
 
-Source revision: `1da26a68629be6ae5fd7f924a7d49ff54763a7df`
+## Current disposition
 
-Public report: [cached wheel archive can survive with zero-byte files](https://redirect.github.com/astral-sh/uv/issues/16841)
+This lane contains two separate candidates. Their evidence and promotion decisions must not be combined.
 
-Prior closed proposal: [validate cached wheel archives against corruption](https://redirect.github.com/astral-sh/uv/pull/19562)
+### Candidate A — missing archive target
 
-Upstream contact performed: `false`
+**Disposition: `POLISH / CURRENT-MAIN RERUN`**
 
-## Current source order
+A cached `.http` or `.rev` pointer can remain valid-looking after its `archive-v0/<id>` directory disappears. Candidate A rejects those stale pointers before planner admission and rechecks local/Git pointers during reconstruction so uv returns through its existing download or extraction path.
 
-The current path has two distinct claims:
+Current source boundary:
 
-1. extraction writes each wheel member into a temporary directory through an async buffered writer;
-2. `Cache::persist()` renames that directory into `archive-v0`, then publishes a link from the wheel cache entry to the archive ID.
+- `crates/uv-distribution/src/archive.rs`;
+- `crates/uv-distribution/src/distribution_database.rs`;
+- `crates/uv-installer/src/plan.rs`;
+- `crates/uv/tests/pip/pip_sync.rs`.
 
-The rename gives namespace atomicity during ordinary execution. It does not, by itself, prove that every extracted file and the renamed directory entry are durable across sudden power loss.
+The fourth file is a repository-native regression. It installs a downloaded local wheel, deletes only the selected extracted archive generation, recreates the environment, and requires successful re-extraction from byte-identical source wheel data into a new generation.
 
-`Archive::exists()` currently checks only:
+Executed evidence already includes:
 
-- archive format version equality; and
-- whether the archive directory exists.
+- Linux local and HTTP baseline reproduction and candidate recovery;
+- Windows local-wheel baseline reproduction and candidate recovery;
+- unchanged source wheel bytes;
+- stale pointer replacement;
+- focused source crate tests.
 
-It therefore treats a present directory as a complete reusable archive without validating the extracted contents.
+The current native-regression carrier and clean-source republish are queued. After they pass, Candidate A should be reconciled onto current public main and reviewed as its own small contribution.
 
-## Confirmed failure class from the report
+### Candidate B — present but corrupt archive
 
-After a power interruption, an archive directory remained present while extracted files, including `METADATA`, were zero bytes. Resolution metadata remained usable, so package resolution succeeded and installation later failed while reading the extracted archive.
+**Disposition: `REPAIR / MEASURE`**
 
-Deleting the cache or bypassing it forced a clean extraction and recovered.
+The five-file prototype records an optional normalized member-path and uncompressed-size receipt in newly created wheel pointers. On reuse, `Archive::exists` walks the extracted archive without following links and rejects missing members, unexpected members, non-file entries, size mismatches, and missing targets.
 
-The important defect boundary is broader than an empty `METADATA` file: a cache entry can be published and trusted without proof that its complete extracted contents are usable.
+Source boundary:
 
-## Why the previous proposal was incomplete
+- `crates/uv-distribution/src/archive.rs`;
+- `crates/uv-distribution/src/distribution_database.rs`;
+- `crates/uv-install-wheel/src/lib.rs`;
+- `crates/uv-install-wheel/src/wheel.rs`;
+- `crates/uv-installer/src/plan.rs`.
 
-Checking only that one `METADATA` file is non-empty catches the reported symptom but does not establish archive integrity.
+Run `30945457187` completed successfully at carrier head `87abbfac14ebf4fc8db952c8bf9142511dffea6f`. It compiled the candidate, reproduced metadata-zero and package-module corruption, created fresh healthy archive generations for both corrupt cases, recovered local and HTTP missing targets, passed focused tests, and published clean source head `9ba8aeb5f73a77639f01bb2ec53dbae2ddb4008b`.
 
-It can miss:
+The original probe called healthy republishing `inconclusive` whenever the old corrupt immutable generation remained as an orphan. The classifier now distinguishes authoritative healthy republishing from physical orphan deletion.
 
-- truncated package code with intact metadata;
-- a valid-looking but incomplete metadata file;
-- missing data files;
-- size or digest disagreement with `RECORD`;
-- a completion marker that reached disk while earlier data did not.
+The source generator also carries native tests for a valid receipt, a missing member, an unexpected member, a size mismatch, and legacy pointer deserialization without a receipt. Stricter execution is queued.
 
-It also places package-format parsing inside a cheap existence check without defining the complete cache validity contract.
+## Active evidence lanes
 
-## Candidate protocol families
+- Candidate A final native-regression run and clean republish;
+- Candidate B stricter recovery and native-test run;
+- warm-cache benchmark at 100, 1,000, and 5,000 members, recording medians and ratios without a noisy threshold;
+- deterministic target test replaying a legal publication interleaving where the wheel-entry link and `.rev` pointer name different archive generations.
 
-### A. Durable publish
+## Remaining design gates
 
-Before the archive becomes reachable:
+Candidate B is not ready for public promotion until these are resolved:
 
-1. finish extraction;
-2. flush and synchronize extracted files that must survive a crash;
-3. synchronize the staging directory;
-4. rename staging into the archive bucket;
-5. synchronize the archive parent directory;
-6. publish the wheel-cache link;
-7. synchronize the link parent when durability is required.
+1. **Performance:** every validated cache hit walks the extracted member tree. Compare the simple preflight design with validation during installation if measured overhead is meaningful.
+2. **Generation authority:** ordinary Unix publication writes the wheel-entry link and `.http` / `.rev` pointer separately. The deterministic interleaving test will establish whether one generation can become pointer-authoritative while another is GC-authoritative.
+3. **Coverage:** source-built/link-only wheels have no `Archive` pointer for this receipt. `.whl.tar.zst` can contain Unix symlinks that the current walk rejects. Broader Git-path and Windows content controls remain.
+4. **Integrity level:** path and size detect the confirmed accidental corruption classes but not same-size alteration. CRC32 or cryptographic member digests require reading member bodies and need a separate cost decision.
+5. **Mutation window:** validation is a snapshot. External mutation after validation but before or during installation remains possible.
+6. **Legacy behavior:** pointers created before this change contain no receipt and intentionally retain presence-only reuse semantics.
 
-Strength: prevents the reported power-loss state when implemented correctly.
+## Current source relationship
 
-Cost: potentially expensive synchronization across every extracted file and platform-specific directory semantics.
+The source pin remains `0cf7c4561b7c7159ab9479719a12573d0a6aa3bb`. Public main advanced to `49e2fc5c821bb69a528308a036b17446bb5ab5a6`; the inspected 12-commit delta did not touch either candidate's product source fence. Rebase only after the current evidence shape stabilizes.
 
-### B. Completion marker without data synchronization
+## Public overlap
 
-Write a marker after extraction and require it on reuse.
+- Public issue: `astral-sh/uv#16841`.
+- Closed metadata-only attempt: `astral-sh/uv#19562`.
+- No broader current public repair was found in the latest overlap search.
 
-Strength: handles process termination before normal completion.
-
-Limit: a marker alone does not prove that prior file data survived sudden power loss. The marker can become durable independently of file contents.
-
-### C. Validate against wheel `RECORD` on reuse
-
-Treat the extracted archive as untrusted until every required member agrees with the wheel's recorded size and digest, then invalidate and re-extract on disagreement.
-
-Strength: detects missing, truncated, and altered extracted files.
-
-Cost: reads and hashes the archive on cache reuse unless validation receipts are cached safely.
-
-### D. Heal on first semantic read failure
-
-When metadata parsing or installation encounters a corrupt cached archive, invalidate it and retry extraction once.
-
-Strength: cheap common path and useful defense in depth.
-
-Limit: catches only corruption encountered by that operation. Intact metadata with damaged package code may pass installation and fail later.
-
-## Recommended experiment order
-
-1. reproduce trust of a deliberately corrupted extracted archive using an isolated cache;
-2. identify every call site that relies on `Archive::exists()` as proof of usability;
-3. fault the boundary before rename, after rename, before link publication, and after link publication;
-4. compare full `RECORD` validation cost with synchronization cost on representative wheels;
-5. keep automatic invalidate-and-refetch as recovery even if durable publish is added;
-6. define Windows, Linux, and macOS semantics separately where directory synchronization differs.
-
-## Added artifacts
-
-- `repro_corrupt_archive.py` builds a tiny wheel, installs it with an isolated cache, truncates the cached extracted metadata, and retries the same install.
-- `crash_model.py` compares directory-existence trust, marker-only trust, durable publish, and full content validation over bounded crash states.
-- `candidate.patch` records a reviewable direction, not an implementation claim.
-
-## Draft upstream summary
-
-The extracted wheel cache currently publishes a renamed directory and later treats directory existence as proof that the archive is reusable. A sudden power loss can preserve the directory entry while losing file contents, after which later installs trust the damaged archive.
-
-A complete repair needs an explicit cache validity contract. A non-empty metadata check catches one manifestation but does not protect package files or prove durability. The first patch should pair a focused corruption regression with either a durable publication protocol or complete archive validation, plus invalidate-and-refetch recovery.
-
-## Validation still required
-
-- execute the isolated-cache reproducer on current uv;
-- confirm the exact cache path and reuse path on Linux, macOS, and Windows;
-- measure full `RECORD` validation overhead;
-- test interruption and hard-power-loss approximations separately;
-- inspect whether the original wheel bytes remain available for local healing;
-- review the final design with a human-written upstream explanation.
+This branch and `teamleaderleo/uv#1` are owned research carriers. They are not public upstream proposals. No public action should be taken from this lane without a separate human decision.
