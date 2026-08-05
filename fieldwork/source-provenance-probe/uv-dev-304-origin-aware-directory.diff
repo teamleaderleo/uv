@@ -1,0 +1,82 @@
+diff --git a/crates/uv-resolver/src/resolver/urls.rs b/crates/uv-resolver/src/resolver/urls.rs
+--- a/crates/uv-resolver/src/resolver/urls.rs
++++ b/crates/uv-resolver/src/resolver/urls.rs
+@@ -42,33 +42,68 @@ impl Urls {
+-        let mut regular: FxHashMap<PackageName, Vec<VerbatimParsedUrl>> = FxHashMap::default();
++        let mut regular: FxHashMap<PackageName, Vec<(VerbatimParsedUrl, bool)>> =
++            FxHashMap::default();
+         let mut overrides = ForkMap::default();
+ 
+         // Add all direct regular requirements and constraints URL.
+         for requirement in manifest.requirements_no_overrides(env, dependencies) {
++            let authored = requirement.origin.is_some();
+             let Some(url) = requirement.source.to_verbatim_parsed_url() else {
+                 // Registry requirement
+                 continue;
+             };
+ 
+             let package_urls = regular.entry(requirement.name.clone()).or_default();
+-            if let Some(package_url) = package_urls
+-                .iter_mut()
+-                .find(|package_url| same_resource(&package_url.parsed_url, &url.parsed_url, git))
++            if let Some((package_url, package_authored)) =
++                package_urls.iter_mut().find(|(package_url, _)| {
++                    same_resource(&package_url.parsed_url, &url.parsed_url, git)
++                })
+             {
+-                // Allow editables to override non-editables.
+-                if package_url.is_editable()
++                let previous_editable = package_url.is_editable();
++                let incoming_editable = url.is_editable();
++                let both_directories = matches!(
++                    (&package_url.parsed_url, &url.parsed_url),
++                    (ParsedUrl::Directory(_), ParsedUrl::Directory(_))
++                );
++
++                // Authored project input determines path presentation over generated metadata.
++                // Editability is merged independently below.
++                let keep_existing = if both_directories {
++                    match (*package_authored, authored) {
++                        (true, false) => true,
++                        (false, true) => false,
++                        _ => previous_editable && !incoming_editable,
++                    }
++                } else {
++                    false
++                };
++
++                if !keep_existing {
++                    *package_url = url;
++                    *package_authored = authored;
++                }
++
++                if (previous_editable || incoming_editable)
+                     && let VerbatimParsedUrl {
+                         parsed_url: ParsedUrl::Directory(ParsedDirectoryUrl { editable, .. }),
+                         verbatim: _,
+-                    } = &url
++                    } = package_url
+                     && editable.is_none()
+                 {
+                     debug!("Allowing an editable variant of {}", &package_url.verbatim);
+-                } else {
+-                    *package_url = url;
++                    *editable = Some(true);
+                 }
+             } else {
+-                package_urls.push(url);
++                package_urls.push((url, authored));
+             }
+         }
+ 
++        let mut regular = regular
++            .into_iter()
++            .map(|(name, urls)| {
++                (
++                    name,
++                    urls.into_iter().map(|(url, _authored)| url).collect(),
++                )
++            })
++            .collect::<FxHashMap<_, _>>();
++
+         // Add all URLs from overrides. If there is an override URL, all other URLs from
