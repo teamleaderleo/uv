@@ -41,6 +41,7 @@ jobs:
           set -euo pipefail
           git checkout --detach "$EXPECTED_BASE"
           python "$RUNNER_TEMP/generate.py"
+          git add -N crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
           git diff --name-only | sort > "$RUNNER_TEMP/source-files.txt"
           cat > "$RUNNER_TEMP/expected-source-files.txt" <<'EOF'
           crates/uv-requirements/Cargo.toml
