@@ -94,10 +94,10 @@ enum SourceRole {
     Other,
 }
 
-fn uv_lockfile_kind(path: &Path) -> Option<UvLockfileKind> {
-    let contents = fs_err::read_to_string(path).ok()?;
+fn uv_lockfile_kind(path: &Path, contents: Option<&str>) -> Option<UvLockfileKind> {
+    let contents = contents?;
     if !matches!(
-        Lock::from_toml(&contents),
+        Lock::from_toml(contents),
         Ok(_)
             | Err(
                 LockParseError::UnsupportedVersion { .. }
@@ -153,7 +153,10 @@ replace_once(
                     Ok(requirements_txt) => requirements_txt,
                     Err(source) => {
                         if matches!(role, SourceRole::Requirement)
-                            && let Some(kind) = uv_lockfile_kind(path)
+                            && let Some(kind) = uv_lockfile_kind(
+                                path,
+                                cache.get(path.as_path()).map(String::as_str),
+                            )
                         {
                             return Err(anyhow::Error::new(UvLockfileAsRequirementsError {
                                 path: path.clone(),
