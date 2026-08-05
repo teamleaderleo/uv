@@ -40,10 +40,10 @@ replace_once(
     "use crate::{RequirementsSource, SourceTree};\n\n#[derive(Debug, Default, Clone)]\n",
     '''use crate::{RequirementsSource, SourceTree};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum UvLockfileKind {
     Project,
-    Script(PathBuf),
+    Script,
     Other,
 }
 
@@ -73,14 +73,13 @@ impl std::error::Error for UvLockfileAsRequirementsError {
 
 impl Hint for UvLockfileAsRequirementsError {
     fn hints(&self) -> Hints<'_> {
-        match &self.kind {
+        match self.kind {
             UvLockfileKind::Project => Hints::from(
                 "Use `uv sync` or `uv export --format requirements-txt` from the owning project, or provide requirements directly instead",
             ),
-            UvLockfileKind::Script(script) => Hints::from(format!(
-                "Use `uv run {0}` to run the script, or `uv export --script {0} --format requirements-txt` to create a requirements file",
-                script.user_display(),
-            )),
+            UvLockfileKind::Script => Hints::from(
+                "Use `uv run <script>` to run the corresponding script, or `uv export --script <script> --format requirements-txt` to create a requirements file",
+            ),
             UvLockfileKind::Other => Hints::from(
                 "Use the uv command that created this lockfile, or provide requirements directly instead",
             ),
@@ -117,7 +116,7 @@ fn uv_lockfile_kind(path: &Path, contents: Option<&str>) -> Option<UvLockfileKin
             && Pep723Metadata::parse(&contents)
                 .is_ok_and(|metadata| metadata.is_some())
         {
-            return Some(UvLockfileKind::Script(script_path));
+            return Some(UvLockfileKind::Script);
         }
     }
 
@@ -326,9 +325,9 @@ fn script_uv_lock_has_dedicated_error_and_hint() -> Result<()> {
                 .and(predicate::str::contains(
                     "Caused by: Couldn't parse requirement in `action.py.lock` at position 0",
                 ))
-                .and(predicate::str::contains("\nhint: Use `uv run action.py`"))
+                .and(predicate::str::contains("\nhint: Use `uv run <script>`"))
                 .and(predicate::str::contains(
-                    "`uv export --script action.py --format requirements-txt`",
+                    "`uv export --script <script> --format requirements-txt`",
                 )),
         );
 
@@ -503,7 +502,7 @@ fn non_utf8_script_uv_lock_is_recognized() -> Result<()> {
         .failure()
         .stderr(
             predicate::str::contains("appears to be a uv lockfile")
-                .and(predicate::str::contains("\nhint: Use `uv run")),
+                .and(predicate::str::contains("\nhint: Use `uv run <script>`")),
         );
 
     Ok(())
