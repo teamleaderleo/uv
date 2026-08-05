@@ -6,12 +6,14 @@ on:
       - research/source-provenance-order-20260802
       - research/validate-uv-dev-304-20260803
       - research/generalize-uv-dev-304-noneditable-20260805
+      - research/authority-negative-control-20260805
   pull_request:
     branches:
       - main
       - research/upstream-79bb-base
       - research/source-provenance-order-20260802
       - research/validate-uv-dev-304-20260803
+      - research/generalize-uv-dev-304-noneditable-20260805
     paths:
       - .github/workflows/fieldwork-source-provenance.yml
       - fieldwork/source-provenance-probe/**
@@ -26,7 +28,7 @@ permissions:
 
 jobs:
   released-versions:
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/research/source-provenance-order-20260802' || (github.event_name == 'pull_request' && github.head_ref != 'research/validate-uv-dev-304-20260803' && github.head_ref != 'research/generalize-uv-dev-304-noneditable-20260805')
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/research/source-provenance-order-20260802' || (github.event_name == 'pull_request' && github.head_ref != 'research/validate-uv-dev-304-20260803' && github.head_ref != 'research/generalize-uv-dev-304-noneditable-20260805' && github.head_ref != 'research/authority-negative-control-20260805')
     name: uv ${{ matrix.uv-version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -65,7 +67,7 @@ jobs:
           if-no-files-found: error
 
   validate-uv-dev-304:
-    if: github.ref == 'refs/heads/research/validate-uv-dev-304-20260803' || github.head_ref == 'research/validate-uv-dev-304-20260803' || github.ref == 'refs/heads/research/generalize-uv-dev-304-noneditable-20260805' || github.head_ref == 'research/generalize-uv-dev-304-noneditable-20260805' || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/research/validate-uv-dev-304-20260803' || github.head_ref == 'research/validate-uv-dev-304-20260803' || github.ref == 'refs/heads/research/generalize-uv-dev-304-noneditable-20260805' || github.head_ref == 'research/generalize-uv-dev-304-noneditable-20260805' || github.ref == 'refs/heads/research/authority-negative-control-20260805' || github.head_ref == 'research/authority-negative-control-20260805' || github.event_name == 'workflow_dispatch'
     name: uv-dev #304 provenance matrix
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -139,10 +141,18 @@ jobs:
           UV_VERSION: uv-dev-304-plus-relative-directory-candidate
         run: bash fieldwork/source-provenance-probe/run.sh
 
+      - name: Run absolute-root authority negative control
+        if: github.ref == 'refs/heads/research/authority-negative-control-20260805' || github.head_ref == 'research/authority-negative-control-20260805'
+        env:
+          UV_VERSION: uv-dev-304-plus-relative-directory-candidate
+        run: bash fieldwork/source-provenance-probe/run-authority-negative-control.sh
+
       - name: Upload exact validation receipts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: uv-dev-304-source-provenance
-          path: fieldwork/source-provenance-probe/out/
+          path: |
+            fieldwork/source-provenance-probe/out/
+            fieldwork/source-provenance-probe/out-authority/
           if-no-files-found: error
