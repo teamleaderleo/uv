@@ -17,7 +17,7 @@ marker = "/// Install a package into a virtual environment using hardlink semant
 test = r'''/// Re-extract a local wheel when its cached archive target has disappeared.
 #[test]
 fn recovers_missing_local_wheel_archive() -> Result<()> {
-    fn find_archive(cache: &std::path::Path) -> PathBuf {
+    fn find_archive(cache: &std::path::Path) -> std::path::PathBuf {
         let metadata = WalkDir::new(cache)
             .into_iter()
             .filter_map(|entry| entry.ok())
