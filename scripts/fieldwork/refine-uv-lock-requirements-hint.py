@@ -33,9 +33,9 @@ replace_once(
     + "        collect_hint::<uv_requirements::UvLockfileAsRequirementsError>(cause, &mut hints);\n",
 )
 
-tests = Path("crates/uv/tests/pip_install/uv_lock_requirements_hint.rs")
-tests.write_text(
-    tests.read_text()
+tool_tests = Path("crates/uv/tests/tool/tool_run.rs")
+tool_tests.write_text(
+    tool_tests.read_text()
     + r'''
 
 #[test]
@@ -59,13 +59,12 @@ fn tool_run_with_requirements_has_dedicated_hint() -> Result<()> {
         .arg("ruff")
         .assert()
         .failure()
-        .stderr(
-            predicate::str::contains("The file `uv.lock` appears to be a uv lockfile").and(
-                predicate::str::contains(
-                    "\nhint: Use `uv sync` or `uv export --format requirements-txt` from the owning project",
-                ),
-            ),
-        );
+        .stderr(predicates::str::contains(
+            "The file `uv.lock` appears to be a uv lockfile",
+        ))
+        .stderr(predicates::str::contains(
+            "\nhint: Use `uv sync` or `uv export --format requirements-txt` from the owning project",
+        ));
 
     Ok(())
 }
