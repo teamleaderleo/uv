@@ -1,0 +1,76 @@
+diff --git a/crates/uv/src/commands/python/list.rs b/crates/uv/src/commands/python/list.rs
+--- a/crates/uv/src/commands/python/list.rs
++++ b/crates/uv/src/commands/python/list.rs
+@@
+ use serde::Serialize;
+ use std::collections::BTreeSet;
++use std::ffi::OsString;
+ use std::fmt::Write;
++use std::path::{Path, PathBuf};
+@@
+ enum Kind {
+@@
+ }
++
++#[derive(Default)]
++struct SeenPaths(FxHashSet<PathBuf>);
++
++impl SeenPaths {
++    fn insert(&mut self, path: &Path) -> bool {
++        self.0.insert(path_dedup_key(path))
++    }
++}
++
++#[cfg(windows)]
++fn path_dedup_key(path: &Path) -> PathBuf {
++    // Candidate only: covers the reported ASCII drive/component casing without
++    // lossy UTF-8 conversion. A final patch should confirm whether the repository
++    // already has a helper matching Windows ordinal case-insensitive semantics.
++    let mut key: OsString = path.as_os_str().to_os_string();
++    key.make_ascii_lowercase();
++    PathBuf::from(key)
++}
++
++#[cfg(not(windows))]
++fn path_dedup_key(path: &Path) -> PathBuf {
++    path.to_path_buf()
++}
+@@
+-    let mut seen_paths = FxHashSet::default();
++    let mut seen_paths = SeenPaths::default();
+@@
+-            if !seen_paths.insert(path) {
++            if !seen_paths.insert(path) {
+                 continue;
+             }
+@@
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::SeenPaths;
++    use std::path::Path;
++
++    #[test]
++    fn exact_duplicate_path_is_rejected() {
++        let mut seen = SeenPaths::default();
++        assert!(seen.insert(Path::new("/python/bin/python")));
++        assert!(!seen.insert(Path::new("/python/bin/python")));
++    }
++
++    #[cfg(windows)]
++    #[test]
++    fn windows_ascii_case_variant_is_rejected() {
++        let mut seen = SeenPaths::default();
++        assert!(seen.insert(Path::new(r"C:\Python312\python.exe")));
++        assert!(!seen.insert(Path::new(r"c:\python312\PYTHON.EXE")));
++    }
++
++    #[cfg(not(windows))]
++    #[test]
++    fn non_windows_case_variant_is_preserved() {
++        let mut seen = SeenPaths::default();
++        assert!(seen.insert(Path::new("/Python/bin/python")));
++        assert!(seen.insert(Path::new("/python/bin/python")));
++    }
++}
