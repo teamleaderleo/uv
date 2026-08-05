@@ -79,7 +79,7 @@ mod tests {
                     None,
                 ),
             }
-            .write_to(wheel_entry.with_file("wheel.rev"))
+            .write_to(&wheel_entry.with_file("wheel.rev"))
             .await
             .unwrap();
             id
@@ -113,7 +113,7 @@ mod tests {
                     None,
                 ),
             }
-            .write_to(wheel_entry.with_file("wheel.rev"))
+            .write_to(&wheel_entry.with_file("wheel.rev"))
             .await
             .unwrap();
             id
