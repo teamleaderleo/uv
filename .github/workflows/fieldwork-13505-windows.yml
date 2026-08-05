@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: teamleaderleo/uv
-          ref: 88174f5aa5d4dc06f6dae9e7cb50a44462f58463
+          ref: 89eb1dbac9aa018478ded480018faf999097a9ff
           path: packet
           persist-credentials: false
 
