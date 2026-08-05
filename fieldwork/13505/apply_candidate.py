@@ -23,25 +23,41 @@ def apply_integration_test(root: Path) -> None:
 """
     block = """    #[cfg(windows)]
     {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
         let original = std::env::split_paths(&context.python_path()).collect::<Vec<_>>();
         let case_variants = original
             .iter()
             .map(|path| {
-                let mut value = path.as_os_str().to_os_string();
-                value.make_ascii_lowercase();
-                if value == path.as_os_str() {
-                    value.make_ascii_uppercase();
+                let mut value = path.as_os_str().encode_wide().collect::<Vec<_>>();
+                let mut changed = false;
+
+                // Skip the drive prefix and flip a code unit in an ordinary path component.
+                // Comparing the raw UTF-16 sequences avoids using Windows `Path` equality to
+                // decide whether the fixture itself is case-distinct.
+                for unit in value.iter_mut().skip(3) {
+                    if (*unit >= b'a' as u16) && (*unit <= b'z' as u16) {
+                        *unit -= (b'a' - b'A') as u16;
+                        changed = true;
+                        break;
+                    }
+                    if (*unit >= b'A' as u16) && (*unit <= b'Z' as u16) {
+                        *unit += (b'a' - b'A') as u16;
+                        changed = true;
+                        break;
+                    }
                 }
-                std::path::PathBuf::from(value)
+
+                assert!(changed, "installed Python path has no ASCII component to case-flip");
+                std::path::PathBuf::from(OsString::from_wide(&value))
             })
             .collect::<Vec<_>>();
 
-        assert!(
-            original
-                .iter()
-                .zip(&case_variants)
-                .any(|(left, right)| left != right)
-        );
+        assert!(original.iter().zip(&case_variants).all(|(left, right)| {
+            left.as_os_str().encode_wide().collect::<Vec<_>>()
+                != right.as_os_str().encode_wide().collect::<Vec<_>>()
+        }));
 
         let path = std::env::join_paths(original.iter().chain(&case_variants)).unwrap();
 
