@@ -6,7 +6,6 @@ on:
       - research/source-provenance-order-20260802
     paths:
       - .github/workflows/fieldwork-source-provenance.yml
-      - fieldwork/source-provenance-probe/run.sh
   pull_request:
     branches:
       - main
@@ -25,6 +24,7 @@ permissions:
 
 jobs:
   source-provenance:
+    if: github.event_name != 'push'
     name: uv ${{ matrix.uv-version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
