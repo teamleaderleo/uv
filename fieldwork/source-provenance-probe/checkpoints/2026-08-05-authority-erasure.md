@@ -1,7 +1,7 @@
 # Fieldwork checkpoint — requirement authority is erased before URL merge
 
 Date: 2026-08-05  
-State: source finding sharpened; metadata-exact behavioral negative control running; upstream contact not authorized.
+State: source finding sharpened; origin-aware behavioral control running; upstream contact not authorized.
 
 ## Question considered
 
@@ -24,9 +24,16 @@ A new authority type may not be required for the first repair.
 
 Both `uv_pep508::Requirement` and `uv_distribution_types::Requirement` already carry `origin: Option<RequirementOrigin>`. The latter preserves that origin through conversion to and from parsed URL requirements. `RequirementOrigin` distinguishes file, project, group, and workspace inputs.
 
-Project locking explicitly marks lowered workspace requirements with `RequirementOrigin::Workspace`. Source-tree resolution similarly assigns `RequirementOrigin::Project` to requirements extracted from an explicitly supplied local project. By contrast, dependencies parsed from built distribution metadata have no authored source file in the metadata format and normally carry no requirement origin.
+Project locking explicitly marks lowered workspace requirements with `RequirementOrigin::Workspace`. Source-tree resolution similarly assigns `RequirementOrigin::Project` to requirements extracted from an explicitly supplied local project.
 
-This means `Urls::from_manifest` does not receive origin-free values; it discards the origin itself when it converts each requirement to `VerbatimParsedUrl`. A small collection-local wrapper could retain both fields through same-resource selection, then store only the selected URL afterward.
+The ordinary lookahead path is different and confirms the candidate distinction more directly:
+
+1. built `METADATA` is parsed into `Requirement` values without assigning an authored origin;
+2. `LookaheadResolver::lookahead` takes `metadata.requires_dist`, adjusts only recursive self-references, and places those requirements directly into `RequestedRequirements`;
+3. `Manifest` later flattens those values ahead of root requirements;
+4. `Urls::from_manifest` discards `requirement.origin` when it extracts only the parsed URL.
+
+Therefore the collision in issue #20477 is expected to contain an origin-free generated requirement and an authored root requirement. The origin signal survives until URL collection, where it is currently discarded.
 
 ## Important limit of `direct`
 
@@ -50,7 +57,9 @@ The resolver currently merges three independent properties through one replaceab
 
 Draft #304 separates editability from replacement for the reported editable collision. The executed non-editable failure shows that presentation authority remains coupled to whichever URL survives.
 
-The fork candidate’s “relative wins, editability is merged independently” rule is a useful discriminator, not yet a proven final design. A more defensible narrow policy is:
+The completed fork experiment “relative wins, editability is merged independently” fixed all eight issue observations, but it is rejected as a final policy. Because lookahead metadata is emitted first, generated relative metadata can be retained over an explicitly absolute root declaration.
+
+A more defensible narrow policy is:
 
 > When equivalent URLs disagree, a requirement with an explicit origin outranks origin-free generated metadata; editability is merged independently.
 
@@ -68,13 +77,25 @@ Requires-Dist: child @ file:../child
 
 The harness calls the backend before locking and fails unless that exact relative metadata requirement exists. The root independently declares the same child through an absolute path. It also fails if the final lock lacks a local path in either the child source or parent metadata, preventing a vacuous pass.
 
-Fork-only carrier: `teamleaderleo/uv#38`.
+The flawed carrier `teamleaderleo/uv#38` was closed before execution. The corrected control now runs with the origin-aware candidate in fork-only draft `teamleaderleo/uv#40`.
+
+## Active origin-aware candidate
+
+The candidate applies after exact draft #304 and changes only URL collection behavior:
+
+1. retain `origin.is_some()` beside each parsed URL during collection;
+2. for equivalent local directories, prefer authored spelling over origin-free generated metadata;
+3. merge editability independently;
+4. retain draft #304 behavior when both candidates have equal authority;
+5. drop the sidecar before the existing override and downstream interfaces.
+
+This deliberately tests only authored input versus generated metadata. It does not claim a complete hierarchy among workspace, project, group, file, constraint, and override origins.
 
 ## Directions considered
 
 ### Add a general provenance enum immediately
 
-Deferred. `RequirementOrigin` already preserves a useful authored-versus-generated distinction. A broader authority enum should be introduced only if executed conflicts show the existing signal is insufficient.
+Deferred. `RequirementOrigin` already preserves the exact first distinction needed by the reported collision. A broader authority enum should be introduced only if executed conflicts show the existing signal is insufficient.
 
 ### Use `RequestedRequirements::direct` as the complete authority signal
 
@@ -82,7 +103,7 @@ Rejected. It classifies the local parent distribution, not the individual child 
 
 ### Keep universal relative precedence
 
-Not acceptable without the negative control. It can fix issue #20477 while potentially converting an intentional absolute root source.
+Rejected as final policy. It passed the reported matrix but can override intentional absolute root input due to lookahead-first ordering.
 
 ### Infer authority during lock serialization
 
@@ -90,19 +111,16 @@ Rejected as the primary repair. Once URL collection has discarded the losing URL
 
 ### Treat `origin.is_some()` as a complete final hierarchy
 
-Not yet accepted. It distinguishes authored input from origin-free metadata, but does not order workspace, project, group, file, constraint, and override origins against each other. Overrides already have separate resolver semantics; equal-authority conflicts still require tests.
+Not accepted. It distinguishes authored input from origin-free metadata, but does not order workspace, project, group, file, constraint, and override origins against each other. Overrides already have separate resolver semantics; equal-authority conflicts still require tests.
 
-## Next implementation discriminator
+## Current implementation discriminator
 
-Run the metadata-exact absolute-root negative control against draft #304 plus the universal relative-precedence candidate.
+Fork PR `teamleaderleo/uv#40` runs two suites against exact draft #304 plus the origin-aware sidecar:
 
-If the root absolute spelling becomes relative, replace the candidate with a collection-local authority wrapper that:
+1. the unchanged eight-observation issue matrix, which must keep every editable and non-editable relative root declaration relative;
+2. the metadata-exact authority control, whose child package source must keep the root’s explicit absolute declaration in both dependency orders.
 
-1. retains each requirement’s `origin` alongside its parsed URL;
-2. prefers explicit-origin URL spelling over origin-free metadata for the same resource;
-3. merges editability independently;
-4. preserves current behavior when both candidates have equal authority;
-5. drops the wrapper after URL selection so downstream interfaces remain unchanged.
+A successful result would establish that existing `RequirementOrigin` is sufficient for the first repair boundary. It would not establish precedence among two authored declarations.
 
 ## Not yet considered
 
