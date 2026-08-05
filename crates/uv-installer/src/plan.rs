@@ -439,7 +439,8 @@ impl<'a> Planner<'a> {
                             let cache_info = pointer.to_cache_info();
                             let build_info = pointer.to_build_info();
                             let archive = pointer.into_archive();
-                            if archive.satisfies(hasher.get(dist.as_ref())) {
+                            if archive.exists(cache) && archive.satisfies(hasher.get(dist.as_ref()))
+                            {
                                 let cached_dist = CachedDirectUrlDist {
                                     filename: wheel.filename.clone(),
                                     url: VerbatimParsedUrl {
@@ -508,7 +509,9 @@ impl<'a> Planner<'a> {
                                     let cache_info = pointer.to_cache_info();
                                     let build_info = pointer.to_build_info();
                                     let archive = pointer.into_archive();
-                                    if archive.satisfies(hasher.get(dist.as_ref())) {
+                                    if archive.exists(cache)
+                                        && archive.satisfies(hasher.get(dist.as_ref()))
+                                    {
                                         let cached_dist = CachedDirectUrlDist {
                                             filename: wheel.filename.clone(),
                                             url: VerbatimParsedUrl {
@@ -572,7 +575,8 @@ impl<'a> Planner<'a> {
                             let cache_info = pointer.to_cache_info();
                             let build_info = pointer.to_build_info();
                             let archive = pointer.into_archive();
-                            if archive.satisfies(hasher.get(dist.as_ref())) {
+                            if archive.exists(cache) && archive.satisfies(hasher.get(dist.as_ref()))
+                            {
                                 let cached_dist = CachedDirectUrlDist {
                                     filename: wheel.filename.clone(),
                                     url: VerbatimParsedUrl {

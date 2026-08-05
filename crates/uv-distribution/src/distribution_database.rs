@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -25,7 +25,7 @@ use uv_distribution_types::{
 use uv_extract::hash::Hasher;
 use uv_fs::write_atomic;
 use uv_git::{GIT_LFS, GitError};
-use uv_install_wheel::validate_and_heal_record;
+use uv_install_wheel::validate_and_heal_record_with_manifest;
 use uv_platform_tags::Tags;
 use uv_pypi_types::{HashDigest, HashDigests, PyProjectToml};
 use uv_python::PythonVariant;
@@ -508,7 +508,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         }
 
         // Otherwise, unzip the wheel.
-        let id = self
+        let (id, _members) = self
             .unzip_wheel(
                 &built_wheel.path,
                 &built_wheel.target,
@@ -682,7 +682,6 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         };
 
         // Acquire an advisory lock, to guard against concurrent writes.
-        #[cfg(windows)]
         let _lock = {
             let lock_entry = wheel_entry.with_file(format!("{}.lock", filename.stem()));
             lock_entry.lock().await.map_err(Error::CacheLock)?
@@ -760,8 +759,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
                 // Before we make the wheel accessible by persisting it, ensure that the RECORD is
                 // valid.
-                validate_and_heal_record(temp_dir.path(), files.iter(), dist)
-                    .map_err(Error::InstallWheelError)?;
+                let members =
+                    validate_and_heal_record_with_manifest(temp_dir.path(), files.iter(), dist)
+                        .map_err(Error::InstallWheelError)?;
 
                 // Persist the temporary directory to the directory store.
                 let id = self
@@ -780,6 +780,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     hashers.into_iter().map(HashDigest::from).collect(),
                     filename.clone(),
                     Some(actual_size),
+                    members,
                 ))
             }
             .instrument(info_span!("wheel", wheel = %dist))
@@ -884,7 +885,6 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         };
 
         // Acquire an advisory lock, to guard against concurrent writes.
-        #[cfg(windows)]
         let _lock = {
             let lock_entry = wheel_entry.with_file(format!("{}.lock", filename.stem()));
             lock_entry.lock().await.map_err(Error::CacheLock)?
@@ -971,8 +971,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
                 // Before we make the wheel accessible by persisting it, ensure that the RECORD is
                 // valid.
-                validate_and_heal_record(temp_dir.path(), files.iter(), dist)
-                    .map_err(Error::InstallWheelError)?;
+                let members =
+                    validate_and_heal_record_with_manifest(temp_dir.path(), files.iter(), dist)
+                        .map_err(Error::InstallWheelError)?;
 
                 // Persist the temporary directory to the directory store.
                 let id = self
@@ -991,6 +992,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     hashes,
                     filename.clone(),
                     Some(actual_size),
+                    members,
                 ))
             }
             .instrument(info_span!("wheel", wheel = %dist))
@@ -1086,7 +1088,6 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &BuiltDist,
         hashes: HashPolicy<'_>,
     ) -> Result<LocalWheel, Error> {
-        #[cfg(windows)]
         let _lock = {
             let lock_entry = wheel_entry.with_file(format!("{}.lock", filename.stem()));
             lock_entry.lock().await.map_err(Error::CacheLock)?
@@ -1103,7 +1104,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         let archive = pointer
             .filter(|pointer| pointer.is_up_to_date(modified))
             .map(PathArchivePointer::into_archive)
-            .filter(|archive| archive.has_digests(hashes));
+            .filter(|archive| archive.has_digests(hashes))
+            .filter(|archive| archive.exists(self.build_context.cache()));
 
         // If the file is already unzipped, and the cache is up-to-date, return it.
         if let Some(archive) = archive {
@@ -1121,13 +1123,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             })
         } else if hashes.is_none() {
             // Otherwise, unzip the wheel.
-            let archive = Archive::new(
-                self.unzip_wheel(path, wheel_entry.path(), DistRef::Built(dist))
-                    .await?,
-                HashDigests::empty(),
-                filename.clone(),
-                None,
-            );
+            let (id, members) = self
+                .unzip_wheel(path, wheel_entry.path(), DistRef::Built(dist))
+                .await?;
+            let archive = Archive::new(id, HashDigests::empty(), filename.clone(), None, members);
 
             // Write the archive pointer to the cache.
             let pointer = PathArchivePointer {
@@ -1180,8 +1179,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
             // Before we make the wheel accessible by persisting it, ensure that the RECORD is
             // valid.
-            validate_and_heal_record(temp_dir.path(), files.iter(), dist)
-                .map_err(Error::InstallWheelError)?;
+            let members =
+                validate_and_heal_record_with_manifest(temp_dir.path(), files.iter(), dist)
+                    .map_err(Error::InstallWheelError)?;
 
             // Persist the temporary directory to the directory store.
             let id = self
@@ -1192,7 +1192,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 .map_err(Error::CacheWrite)?;
 
             // Create an archive.
-            let archive = Archive::new(id, hashes, filename.clone(), None);
+            let archive = Archive::new(id, hashes, filename.clone(), None, members);
 
             // Write the archive pointer to the cache.
             let pointer = PathArchivePointer {
@@ -1222,7 +1222,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         path: &Path,
         target: &Path,
         dist: DistRef<'_>,
-    ) -> Result<ArchiveId, Error> {
+    ) -> Result<(ArchiveId, Vec<(PathBuf, u64)>), Error> {
         let (temp_dir, files) = tokio::task::spawn_blocking({
             let path = path.to_owned();
             let root = self.build_context.cache().root().to_path_buf();
@@ -1238,7 +1238,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         .await??;
 
         // Before we make the wheel accessible by persisting it, ensure that the RECORD is valid.
-        validate_and_heal_record(temp_dir.path(), files.iter(), dist)
+        let members = validate_and_heal_record_with_manifest(temp_dir.path(), files.iter(), dist)
             .map_err(Error::InstallWheelError)?;
 
         // Persist the temporary directory to the directory store.
@@ -1249,7 +1249,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             .await
             .map_err(Error::CacheWrite)?;
 
-        Ok(id)
+        Ok((id, members))
     }
 
     /// Returns a GET [`reqwest::Request`] for the given URL.
@@ -1501,7 +1501,113 @@ fn add_tar_zst_extension(mut url: DisplaySafeUrl) -> DisplaySafeUrl {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+    use std::sync::Arc;
+
+    use tokio::sync::oneshot;
+    use uv_cache::Cache;
+
     use super::*;
+
+    #[tokio::test]
+    async fn wheel_publication_lock_serializes_link_and_pointer_updates() {
+        let cache = Arc::new(Cache::temp().unwrap());
+        let source = cache.root().join("source.whl");
+        fs_err::write(&source, b"wheel").unwrap();
+        let timestamp = Timestamp::from_path(&source).unwrap();
+        let filename = WheelFilename::from_str("iniconfig-2.0.0-py3-none-any.whl").unwrap();
+
+        let (a_persisted_tx, a_persisted_rx) = oneshot::channel();
+        let (release_a_tx, release_a_rx) = oneshot::channel();
+        let cache_a = Arc::clone(&cache);
+        let filename_a = filename.clone();
+        let publisher_a = tokio::spawn(async move {
+            let wheel_entry = cache_a.entry(CacheBucket::Wheels, "generation-lock", "wheel");
+            let lock_entry = wheel_entry.with_file("wheel.lock");
+            let _lock = lock_entry.lock().await.unwrap();
+
+            let temp = tempfile::tempdir_in(cache_a.root()).unwrap();
+            fs_err::write(temp.path().join("member-a"), b"a").unwrap();
+            let id = cache_a
+                .persist(temp.keep(), wheel_entry.path())
+                .await
+                .unwrap();
+            a_persisted_tx.send(()).unwrap();
+            release_a_rx.await.unwrap();
+
+            PathArchivePointer {
+                timestamp,
+                archive: Archive::new(
+                    id.clone(),
+                    HashDigests::empty(),
+                    filename_a,
+                    None,
+                    vec![(std::path::PathBuf::from("member-a"), 1)],
+                ),
+            }
+            .write_to(&wheel_entry.with_file("wheel.rev"))
+            .await
+            .unwrap();
+            id
+        });
+
+        a_persisted_rx.await.unwrap();
+
+        let (b_started_tx, b_started_rx) = oneshot::channel();
+        let (b_acquired_tx, mut b_acquired_rx) = oneshot::channel();
+        let cache_b = Arc::clone(&cache);
+        let publisher_b = tokio::spawn(async move {
+            let wheel_entry = cache_b.entry(CacheBucket::Wheels, "generation-lock", "wheel");
+            b_started_tx.send(()).unwrap();
+            let lock_entry = wheel_entry.with_file("wheel.lock");
+            let _lock = lock_entry.lock().await.unwrap();
+            b_acquired_tx.send(()).unwrap();
+
+            let temp = tempfile::tempdir_in(cache_b.root()).unwrap();
+            fs_err::write(temp.path().join("member-b"), b"b").unwrap();
+            let id = cache_b
+                .persist(temp.keep(), wheel_entry.path())
+                .await
+                .unwrap();
+            PathArchivePointer {
+                timestamp,
+                archive: Archive::new(
+                    id.clone(),
+                    HashDigests::empty(),
+                    filename,
+                    None,
+                    vec![(std::path::PathBuf::from("member-b"), 1)],
+                ),
+            }
+            .write_to(&wheel_entry.with_file("wheel.rev"))
+            .await
+            .unwrap();
+            id
+        });
+
+        b_started_rx.await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            b_acquired_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+
+        release_a_tx.send(()).unwrap();
+        let id_a = publisher_a.await.unwrap();
+        b_acquired_rx.await.unwrap();
+        let id_b = publisher_b.await.unwrap();
+        assert_ne!(id_a, id_b);
+
+        let wheel_entry = cache.entry(CacheBucket::Wheels, "generation-lock", "wheel");
+        let linked = cache.resolve_link(wheel_entry.path()).unwrap();
+        assert_eq!(linked, fs_err::canonicalize(cache.archive(&id_b)).unwrap());
+
+        let pointed = PathArchivePointer::read_from(wheel_entry.with_file("wheel.rev"))
+            .unwrap()
+            .unwrap()
+            .into_archive();
+        assert_eq!(pointed.id, id_b);
+    }
 
     #[test]
     fn test_add_tar_zst_extension() {

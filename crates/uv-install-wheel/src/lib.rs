@@ -15,7 +15,10 @@ pub use install::{install_wheel, installed_dist_info_path};
 pub use linker::{InstallState, LinkMode};
 pub use record::RecordEntry;
 pub use uninstall::{Uninstall, uninstall_egg, uninstall_legacy_editable, uninstall_wheel};
-pub use wheel::{WheelFile, read_record, read_record_into_iter, validate_and_heal_record};
+pub use wheel::{
+    WheelFile, read_record, read_record_into_iter, validate_and_heal_record,
+    validate_and_heal_record_with_manifest,
+};
 
 mod install;
 mod linker;

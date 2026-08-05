@@ -991,9 +991,23 @@ pub fn validate_and_heal_record<'a>(
     unpacked_wheel: impl IntoIterator<Item = &'a (PathBuf, u64)>,
     dist: impl Display,
 ) -> Result<(), Error> {
-    // On the filesystem: The unpacked files of the wheel.
-    let mut files: BTreeMap<&Path, u64> = unpacked_wheel
+    validate_and_heal_record_with_manifest(wheel_dir, unpacked_wheel, dist).map(drop)
+}
+
+/// Validate and heal RECORD while returning a trusted extracted-member inventory.
+pub fn validate_and_heal_record_with_manifest<'a>(
+    wheel_dir: &Path,
+    unpacked_wheel: impl IntoIterator<Item = &'a (PathBuf, u64)>,
+    dist: impl Display,
+) -> Result<Vec<(PathBuf, u64)>, Error> {
+    let mut unpacked_files: BTreeMap<PathBuf, u64> = unpacked_wheel
         .into_iter()
+        .map(|(path, size)| (uv_fs::normalize_path(path).into_owned(), *size))
+        .collect();
+
+    // On the filesystem: The unpacked files of the wheel.
+    let mut files: BTreeMap<&Path, u64> = unpacked_files
+        .iter()
         .map(|(path, size)| (path.as_path(), *size))
         .collect();
 
@@ -1066,7 +1080,9 @@ pub fn validate_and_heal_record<'a>(
         write_record(wheel_dir, &dist_info_prefix, record)?;
     }
 
-    Ok(())
+    let record_relative = PathBuf::from(&dist_info_dir).join("RECORD");
+    unpacked_files.insert(record_relative, fs::metadata(&record_path)?.len());
+    Ok(unpacked_files.into_iter().collect())
 }
 
 /// Parse a file with email message format such as WHEEL and METADATA
