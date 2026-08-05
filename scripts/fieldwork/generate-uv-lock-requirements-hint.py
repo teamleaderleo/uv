@@ -97,11 +97,7 @@ fn uv_lockfile_kind(path: &Path, contents: Option<&str>) -> Option<UvLockfileKin
     let contents = contents?;
     if !matches!(
         Lock::from_toml(contents),
-        Ok(_)
-            | Err(
-                LockParseError::UnsupportedVersion { .. }
-                    | LockParseError::UnparsableVersion { .. }
-            )
+        Ok(_) | Err(LockParseError::UnsupportedVersion { .. })
     ) {
         return None;
     }
@@ -384,6 +380,30 @@ fn script_shaped_non_lock_keeps_original_parse_error() -> Result<()> {
             )
             .and(predicate::str::contains("appears to be a uv lockfile").not())
             .and(predicate::str::contains("\nhint:").not()),
+        );
+
+    Ok(())
+}
+
+#[test]
+fn incomplete_future_version_toml_keeps_original_parse_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("future.lock")
+        .write_str("version = 2\nrevision = 1\n")?;
+
+    context
+        .pip_install()
+        .arg("-r")
+        .arg("future.lock")
+        .arg("--strict")
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("Couldn't parse requirement in `future.lock` at position 0")
+                .and(predicate::str::contains("appears to be a uv lockfile").not())
+                .and(predicate::str::contains("\nhint:").not()),
         );
 
     Ok(())
