@@ -1,0 +1,51 @@
+diff --git a/crates/uv-resolver/src/resolver/urls.rs b/crates/uv-resolver/src/resolver/urls.rs
+--- a/crates/uv-resolver/src/resolver/urls.rs
++++ b/crates/uv-resolver/src/resolver/urls.rs
+@@ -55,16 +55,42 @@ impl Urls {
+                 .find(|package_url| same_resource(&package_url.parsed_url, &url.parsed_url, git))
+             {
+                 // Allow editables to override non-editables.
+-                if package_url.is_editable()
+-                    && let VerbatimParsedUrl {
+-                        parsed_url: ParsedUrl::Directory(ParsedDirectoryUrl { editable, .. }),
+-                        verbatim: _,
+-                    } = &url
+-                    && editable.is_none()
+-                {
+-                    debug!("Allowing an editable variant of {}", &package_url.verbatim);
++                let previous_editable = package_url.is_editable();
++                let incoming_editable = url.is_editable();
++                let preserve_relative = matches!(
++                    (&package_url.parsed_url, &url.parsed_url),
++                    (ParsedUrl::Directory(_), ParsedUrl::Directory(_))
++                ) && !package_url.verbatim.was_given_absolute()
++                    && url.verbatim.was_given_absolute();
++
++                if preserve_relative {
++                    if incoming_editable
++                        && !previous_editable
++                        && let VerbatimParsedUrl {
++                            parsed_url:
++                                ParsedUrl::Directory(ParsedDirectoryUrl { editable, .. }),
++                            verbatim: _,
++                        } = package_url
++                    {
++                        debug!("Allowing an editable variant of {}", &package_url.verbatim);
++                        *editable = Some(true);
++                    }
+                 } else {
+                     *package_url = url;
++                    if previous_editable
++                        && !incoming_editable
++                        && let VerbatimParsedUrl {
++                            parsed_url:
++                                ParsedUrl::Directory(ParsedDirectoryUrl { editable, .. }),
++                            verbatim: _,
++                        } = package_url
++                    {
++                        debug!("Allowing an editable variant of {}", &package_url.verbatim);
++                        *editable = Some(true);
++                    }
+                 }
+             } else {
+                 package_urls.push(url);
