@@ -4,8 +4,11 @@
 from pathlib import Path
 import sys
 
-path = Path(sys.argv[1]) / "crates/uv-distribution/src/distribution_database.rs"
+root = Path(sys.argv[1])
+path = root / "crates/uv-distribution/src/distribution_database.rs"
+archive_path = root / "crates/uv-distribution/src/archive.rs"
 text = path.read_text(encoding="utf-8")
+archive_text = archive_path.read_text(encoding="utf-8")
 
 lock_guard = "        #[cfg(windows)]\n        let _lock = {"
 if text.count(lock_guard) != 4:
@@ -25,6 +28,20 @@ text = text[:prefix_end] + text[prefix_end:].replace(
 )
 if text.count(lock_guard) != 1:
     raise SystemExit("source-built link-only lock was not preserved exactly once")
+
+# The standalone lock candidate uses the current four-argument Archive::new.
+# The combined member-manifest source adds a fifth member-receipt argument.
+manifest_archive = "members: Option<Vec<ArchiveMember>>" in archive_text
+members_a = (
+    '                    vec![(std::path::PathBuf::from("member-a"), 1)],\n'
+    if manifest_archive
+    else ""
+)
+members_b = (
+    '                    vec![(std::path::PathBuf::from("member-b"), 1)],\n'
+    if manifest_archive
+    else ""
+)
 
 old = """#[cfg(test)]
 mod tests {
@@ -77,7 +94,7 @@ mod tests {
                     HashDigests::empty(),
                     filename_a,
                     None,
-                ),
+__ARCHIVE_A_MEMBERS__                ),
             }
             .write_to(&wheel_entry.with_file("wheel.rev"))
             .await
@@ -111,7 +128,7 @@ mod tests {
                     HashDigests::empty(),
                     filename,
                     None,
-                ),
+__ARCHIVE_B_MEMBERS__                ),
             }
             .write_to(&wheel_entry.with_file("wheel.rev"))
             .await
@@ -146,6 +163,9 @@ mod tests {
     #[test]
     fn test_add_tar_zst_extension() {
 """
+new = new.replace("__ARCHIVE_A_MEMBERS__", members_a).replace(
+    "__ARCHIVE_B_MEMBERS__", members_b
+)
 if text.count(old) != 1:
     raise SystemExit("generation lock test insertion point mismatch")
 text = text.replace(old, new)
