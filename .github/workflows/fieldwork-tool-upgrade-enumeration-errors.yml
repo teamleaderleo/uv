@@ -1,0 +1,127 @@
+name: Fieldwork tool upgrade enumeration errors
+
+on:
+  pull_request:
+    paths:
+      - 'fieldwork/tool-upgrade-enumeration-errors/**'
+      - '.github/workflows/fieldwork-tool-upgrade-enumeration-errors.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CURRENT_SOURCE_HEAD: 8afd62105cf46e7251f56645253e15cfcd1da678
+      CLEAN_SOURCE_BRANCH: fix/tool-upgrade-all-enumeration-errors
+    steps:
+      - name: Check out exact carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check out exact uv source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fieldwork/upstream-8afd621
+          path: uv-current
+          persist-credentials: false
+
+      - name: Verify exact identities and transformation
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git -C uv-current rev-parse HEAD)" = "$CURRENT_SOURCE_HEAD"
+          python3 -m py_compile \
+            fieldwork/tool-upgrade-enumeration-errors/apply_candidate.py \
+            fieldwork/tool-upgrade-enumeration-errors/probe.py
+          cp -R uv-current uv-transform-check
+          python3 fieldwork/tool-upgrade-enumeration-errors/apply_candidate.py \
+            uv-transform-check
+          git -C uv-transform-check diff --check
+          test "$(git -C uv-transform-check diff --name-only)" = "$(printf '%s\n' \
+            crates/uv/src/commands/tool/upgrade.rs \
+            crates/uv/tests/tool/tool_upgrade.rs)"
+          rm -rf uv-transform-check
+
+      - name: Build exact baseline
+        working-directory: uv-current
+        run: cargo build --locked --bin uv
+
+      - name: Reproduce hidden enumeration failure
+        run: |
+          python3 fieldwork/tool-upgrade-enumeration-errors/probe.py \
+            --uv uv-current/target/debug/uv \
+            --expect hidden \
+            | tee tool-upgrade-enumeration-baseline.json
+
+      - name: Apply bounded candidate
+        run: |
+          python3 fieldwork/tool-upgrade-enumeration-errors/apply_candidate.py uv-current
+          git -C uv-current diff --check
+          rustup component add rustfmt
+          (cd uv-current && cargo fmt --all)
+          (cd uv-current && cargo fmt --all -- --check)
+          git -C uv-current diff --binary > tool-upgrade-enumeration-tested.patch
+          git -C uv-current diff --name-only > tool-upgrade-enumeration-files.txt
+          test "$(cat tool-upgrade-enumeration-files.txt)" = "$(printf '%s\n' \
+            crates/uv/src/commands/tool/upgrade.rs \
+            crates/uv/tests/tool/tool_upgrade.rs)"
+
+      - name: Build candidate
+        working-directory: uv-current
+        run: cargo build --locked --bin uv
+
+      - name: Verify enumeration failure propagates
+        run: |
+          python3 fieldwork/tool-upgrade-enumeration-errors/probe.py \
+            --uv uv-current/target/debug/uv \
+            --expect failed \
+            | tee tool-upgrade-enumeration-candidate.json
+
+      - name: Run native regression
+        working-directory: uv-current
+        run: |
+          cargo test --locked -p uv --test tool \
+            tool_upgrade_all_fails_on_invalid_tool_directory
+
+      - name: Publish exact clean source branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git -C uv-current config user.name "teamleaderleo"
+          git -C uv-current config user.email "13091533+teamleaderleo@users.noreply.github.com"
+          git -C uv-current switch -C "$CLEAN_SOURCE_BRANCH"
+          git -C uv-current add -- \
+            crates/uv/src/commands/tool/upgrade.rs \
+            crates/uv/tests/tool/tool_upgrade.rs
+          git -C uv-current diff --cached --check
+          git -C uv-current diff --cached --name-only > tool-upgrade-enumeration-clean-files.txt
+          cmp tool-upgrade-enumeration-files.txt tool-upgrade-enumeration-clean-files.txt
+          git -C uv-current commit -m "fix: propagate tool inventory enumeration errors"
+          git -C uv-current push --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${CLEAN_SOURCE_BRANCH}"
+          git -C uv-current rev-parse HEAD > tool-upgrade-enumeration-clean-head.txt
+
+      - name: Upload exact receipts
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: fieldwork-tool-upgrade-enumeration-errors
+          path: |
+            tool-upgrade-enumeration-baseline.json
+            tool-upgrade-enumeration-candidate.json
+            tool-upgrade-enumeration-tested.patch
+            tool-upgrade-enumeration-files.txt
+            tool-upgrade-enumeration-clean-files.txt
+            tool-upgrade-enumeration-clean-head.txt
+          if-no-files-found: warn
+          retention-days: 30
