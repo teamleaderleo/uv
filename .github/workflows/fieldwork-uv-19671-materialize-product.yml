@@ -7,6 +7,12 @@ on:
     paths:
       - .github/fieldwork/19671-product/**
       - .github/workflows/fieldwork-uv-19671-materialize-product.yml
+  pull_request:
+    branches:
+      - fieldwork/19671-current-main-backend-scope
+    paths:
+      - .github/fieldwork/19671-product/**
+      - .github/workflows/fieldwork-uv-19671-materialize-product.yml
   workflow_dispatch:
 
 permissions:
