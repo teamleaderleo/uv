@@ -140,9 +140,7 @@ def verify_install(venv: Path, work: Path) -> dict[str, Any]:
 
 def matching_archive_files(cache: Path) -> list[dict[str, Path]]:
     archives: list[dict[str, Path]] = []
-    metadata_pattern = (
-        f"archive-v*/**/{MODULE_NAME}-{VERSION}.dist-info/METADATA"
-    )
+    metadata_pattern = f"archive-v*/**/{MODULE_NAME}-{VERSION}.dist-info/METADATA"
     for metadata in sorted(cache.glob(metadata_pattern)):
         module = metadata.parent.parent / MODULE_NAME / "__init__.py"
         if metadata.is_file() and module.is_file():
@@ -237,8 +235,7 @@ def run_scenario(uv: str, root: Path, wheel: Path, mode: str) -> dict[str, Any]:
     second_venv, second = install_once(uv, work, cache, wheel, "venv-second")
     second_verify = verify_install(second_venv, work) if successful_install(second) else None
     final_archives = [
-        archive_receipt(candidate, cache)
-        for candidate in matching_archive_files(cache)
+        archive_receipt(candidate, cache) for candidate in matching_archive_files(cache)
     ]
 
     same_root_final = next(
@@ -247,7 +244,7 @@ def run_scenario(uv: str, root: Path, wheel: Path, mode: str) -> dict[str, Any]:
     )
     archive_repaired = (
         same_root_final is not None
-        and same_root_final["metadata"]["size"] > 0
+        and same_root_final["metadata"]["sha256"] == before["metadata"]["sha256"]
         and same_root_final["module"]["sha256"] == before["module"]["sha256"]
     )
     archive_replaced = (
@@ -258,6 +255,14 @@ def run_scenario(uv: str, root: Path, wheel: Path, mode: str) -> dict[str, Any]:
         )
         != (before["metadata"]["inode"], before["module"]["inode"])
     )
+    healthy_replacements = [
+        item
+        for item in final_archives
+        if item["root"] != before["root"]
+        and item["metadata"]["sha256"] == before["metadata"]["sha256"]
+        and item["module"]["sha256"] == before["module"]["sha256"]
+    ]
+    archive_republished = bool(healthy_replacements)
 
     if mode == "clean-control":
         outcome = (
@@ -268,7 +273,9 @@ def run_scenario(uv: str, root: Path, wheel: Path, mode: str) -> dict[str, Any]:
             else "probe-failure"
         )
     elif successful_install(second) and second_verify is not None:
-        if successful_verification(second_verify) and (archive_repaired or archive_replaced):
+        if successful_verification(second_verify) and (
+            archive_repaired or archive_replaced or archive_republished
+        ):
             outcome = "recovered"
         elif successful_verification(second_verify):
             outcome = "inconclusive"
@@ -292,6 +299,8 @@ def run_scenario(uv: str, root: Path, wheel: Path, mode: str) -> dict[str, Any]:
         "archives_after_retry": final_archives,
         "archive_repaired": archive_repaired,
         "archive_replaced": archive_replaced,
+        "archive_republished": archive_republished,
+        "healthy_replacements": healthy_replacements,
         "first_install": first,
         "first_verification": first_verify,
         "second_install": second,
