@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -25,7 +25,7 @@ use uv_distribution_types::{
 use uv_extract::hash::Hasher;
 use uv_fs::write_atomic;
 use uv_git::{GIT_LFS, GitError};
-use uv_install_wheel::validate_and_heal_record;
+use uv_install_wheel::validate_and_heal_record_with_manifest;
 use uv_platform_tags::Tags;
 use uv_pypi_types::{HashDigest, HashDigests, PyProjectToml};
 use uv_python::PythonVariant;
@@ -508,7 +508,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         }
 
         // Otherwise, unzip the wheel.
-        let id = self
+        let (id, _members) = self
             .unzip_wheel(
                 &built_wheel.path,
                 &built_wheel.target,
@@ -760,8 +760,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
                 // Before we make the wheel accessible by persisting it, ensure that the RECORD is
                 // valid.
-                validate_and_heal_record(temp_dir.path(), files.iter(), dist)
-                    .map_err(Error::InstallWheelError)?;
+                let members =
+                    validate_and_heal_record_with_manifest(temp_dir.path(), files.iter(), dist)
+                        .map_err(Error::InstallWheelError)?;
 
                 // Persist the temporary directory to the directory store.
                 let id = self
@@ -780,6 +781,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     hashers.into_iter().map(HashDigest::from).collect(),
                     filename.clone(),
                     Some(actual_size),
+                    members,
                 ))
             }
             .instrument(info_span!("wheel", wheel = %dist))
@@ -971,8 +973,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
                 // Before we make the wheel accessible by persisting it, ensure that the RECORD is
                 // valid.
-                validate_and_heal_record(temp_dir.path(), files.iter(), dist)
-                    .map_err(Error::InstallWheelError)?;
+                let members =
+                    validate_and_heal_record_with_manifest(temp_dir.path(), files.iter(), dist)
+                        .map_err(Error::InstallWheelError)?;
 
                 // Persist the temporary directory to the directory store.
                 let id = self
@@ -991,6 +994,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     hashes,
                     filename.clone(),
                     Some(actual_size),
+                    members,
                 ))
             }
             .instrument(info_span!("wheel", wheel = %dist))
@@ -1103,7 +1107,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         let archive = pointer
             .filter(|pointer| pointer.is_up_to_date(modified))
             .map(PathArchivePointer::into_archive)
-            .filter(|archive| archive.has_digests(hashes));
+            .filter(|archive| archive.has_digests(hashes))
+            .filter(|archive| archive.exists(self.build_context.cache()));
 
         // If the file is already unzipped, and the cache is up-to-date, return it.
         if let Some(archive) = archive {
@@ -1121,13 +1126,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             })
         } else if hashes.is_none() {
             // Otherwise, unzip the wheel.
-            let archive = Archive::new(
-                self.unzip_wheel(path, wheel_entry.path(), DistRef::Built(dist))
-                    .await?,
-                HashDigests::empty(),
-                filename.clone(),
-                None,
-            );
+            let (id, members) = self
+                .unzip_wheel(path, wheel_entry.path(), DistRef::Built(dist))
+                .await?;
+            let archive = Archive::new(id, HashDigests::empty(), filename.clone(), None, members);
 
             // Write the archive pointer to the cache.
             let pointer = PathArchivePointer {
@@ -1180,8 +1182,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
             // Before we make the wheel accessible by persisting it, ensure that the RECORD is
             // valid.
-            validate_and_heal_record(temp_dir.path(), files.iter(), dist)
-                .map_err(Error::InstallWheelError)?;
+            let members =
+                validate_and_heal_record_with_manifest(temp_dir.path(), files.iter(), dist)
+                    .map_err(Error::InstallWheelError)?;
 
             // Persist the temporary directory to the directory store.
             let id = self
@@ -1192,7 +1195,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 .map_err(Error::CacheWrite)?;
 
             // Create an archive.
-            let archive = Archive::new(id, hashes, filename.clone(), None);
+            let archive = Archive::new(id, hashes, filename.clone(), None, members);
 
             // Write the archive pointer to the cache.
             let pointer = PathArchivePointer {
@@ -1222,7 +1225,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         path: &Path,
         target: &Path,
         dist: DistRef<'_>,
-    ) -> Result<ArchiveId, Error> {
+    ) -> Result<(ArchiveId, Vec<(PathBuf, u64)>), Error> {
         let (temp_dir, files) = tokio::task::spawn_blocking({
             let path = path.to_owned();
             let root = self.build_context.cache().root().to_path_buf();
@@ -1238,7 +1241,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         .await??;
 
         // Before we make the wheel accessible by persisting it, ensure that the RECORD is valid.
-        validate_and_heal_record(temp_dir.path(), files.iter(), dist)
+        let members = validate_and_heal_record_with_manifest(temp_dir.path(), files.iter(), dist)
             .map_err(Error::InstallWheelError)?;
 
         // Persist the temporary directory to the directory store.
@@ -1249,7 +1252,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             .await
             .map_err(Error::CacheWrite)?;
 
-        Ok(id)
+        Ok((id, members))
     }
 
     /// Returns a GET [`reqwest::Request`] for the given URL.
