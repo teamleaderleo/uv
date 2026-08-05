@@ -1,0 +1,114 @@
+name: Fieldwork uv lock requirements global validation
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/current-main-global-base
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      UV_BASE: 2ac6b42a3572a474de2edc2bee824c13631636ec
+      SOURCE_BASE: 49e2fc5c821bb69a528308a036b17446bb5ab5a6
+      SOURCE_COMMIT: 51c9fe109f037d084fd17647dc78a6451c2938f2
+      SOURCE_BRANCH: candidate/uv-lock-requirements-hint-current-v2
+    steps:
+      - name: Check out carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | sort > "$RUNNER_TEMP/carrier-files.txt"
+          printf '%s\n' scripts/fieldwork/refine-uv-lock-requirements-hint.py > "$RUNNER_TEMP/expected-carrier-files.txt"
+          diff -u "$RUNNER_TEMP/expected-carrier-files.txt" "$RUNNER_TEMP/carrier-files.txt"
+          cp scripts/fieldwork/refine-uv-lock-requirements-hint.py "$RUNNER_TEMP/refine.py"
+
+      - name: Apply accepted source and global refinement
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$UV_BASE"
+          git diff "$SOURCE_BASE" "$SOURCE_COMMIT" -- . ':(exclude)Cargo.lock' > "$RUNNER_TEMP/source-without-lock.patch"
+          git apply --3way --whitespace=error-all "$RUNNER_TEMP/source-without-lock.patch"
+          python "$RUNNER_TEMP/refine.py"
+          git add -N crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
+          cargo fmt --all
+          cargo check -p uv-requirements -p uv
+          git diff --name-only | sort > "$RUNNER_TEMP/source-files.txt"
+          cat > "$RUNNER_TEMP/expected-source-files.txt" <<'EOF'
+          Cargo.lock
+          crates/uv-requirements/Cargo.toml
+          crates/uv-requirements/src/specification.rs
+          crates/uv/src/commands/diagnostics.rs
+          crates/uv/tests/pip_install/main.rs
+          crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
+          EOF
+          diff -u "$RUNNER_TEMP/expected-source-files.txt" "$RUNNER_TEMP/source-files.txt"
+          git diff --check
+          cargo fmt --all --check
+          git diff --stat | tee "$RUNNER_TEMP/source-stat.txt"
+          git diff > "$RUNNER_TEMP/source.patch"
+
+      - name: Run focused integration controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p uv --test pip_install --features test-python,test-pypi \
+            uv_lock_requirements_hint -- --nocapture \
+            | tee "$RUNNER_TEMP/focused-tests.txt"
+
+      - name: Run affected Clippy gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy --locked -p uv-requirements -p uv --tests \
+            --features test-python,test-pypi -- -D warnings
+
+      - name: Publish refreshed clean source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --name-only | sort > "$RUNNER_TEMP/source-files-published.txt"
+          diff -u "$RUNNER_TEMP/expected-source-files.txt" "$RUNNER_TEMP/source-files-published.txt"
+          git config user.name fieldwork-validation
+          git config user.email fieldwork-validation@users.noreply.github.com
+          git add \
+            Cargo.lock \
+            crates/uv-requirements/Cargo.toml \
+            crates/uv-requirements/src/specification.rs \
+            crates/uv/src/commands/diagnostics.rs \
+            crates/uv/tests/pip_install/main.rs \
+            crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
+          git commit -m "fix: hint when uv lockfiles are used as requirements"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/source-head.txt"
+          git rev-parse HEAD^{tree} | tee "$RUNNER_TEMP/source-tree.txt"
+          test "$(git rev-list --count "$UV_BASE"..HEAD)" = 1
+          git push --force origin "HEAD:refs/heads/$SOURCE_BRANCH"
+
+      - name: Retain receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: uv-lock-requirements-global-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/carrier-files.txt
+            ${{ runner.temp }}/source-files.txt
+            ${{ runner.temp }}/source-files-published.txt
+            ${{ runner.temp }}/source-stat.txt
+            ${{ runner.temp }}/source.patch
+            ${{ runner.temp }}/focused-tests.txt
+            ${{ runner.temp }}/source-head.txt
+            ${{ runner.temp }}/source-tree.txt
+          if-no-files-found: warn
+          retention-days: 14
