@@ -1,0 +1,118 @@
+name: Fieldwork uv stubs current-main scope
+
+on:
+  push:
+    branches:
+      - fieldwork/19671-current-main-backend-scope
+    paths:
+      - .github/fieldwork/19671-current-main/**
+      - .github/workflows/fieldwork-uv-19671-current-main-backend-scope.yml
+  pull_request:
+    paths:
+      - .github/fieldwork/19671-current-main/**
+      - .github/workflows/fieldwork-uv-19671-current-main-backend-scope.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-uv-19671-current-main-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PUBLIC_MAIN: 49e2fc5c821bb69a528308a036b17446bb5ab5a6
+  INIT_BLOB: c9dc1368f3c1f5f6f41098fb22a918cd3a926b4f
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  current-main-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+
+    steps:
+      - name: Check out controlled carrier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: carrier
+
+      - name: Check out exact public main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: astral-sh/uv
+          ref: ${{ env.PUBLIC_MAIN }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+
+      - name: Verify identities and apply current-main candidate
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/current-main
+          test "$(git -C source rev-parse HEAD)" = "$PUBLIC_MAIN"
+          test "$(git -C source hash-object crates/uv/src/commands/project/init.rs)" = "$INIT_BLOB"
+          (
+            cd source
+            python3 ../carrier/.github/fieldwork/19671-current-main/apply_backend_scope.py
+          )
+          git -C source diff --check
+          printf '%s\n' crates/uv/src/commands/project/init.rs >expected-files.txt
+          git -C source diff --name-only | sort >changed-files.txt
+          diff -u expected-files.txt changed-files.txt
+          bash -n carrier/.github/fieldwork/19671-current-main/backend_matrix.sh
+          git -C source diff -- crates/uv/src/commands/project/init.rs \
+            >artifacts/current-main/current-main.patch
+          {
+            echo "public_main=$PUBLIC_MAIN"
+            echo "init_blob=$INIT_BLOB"
+            echo "carrier_head=$(git -C carrier rev-parse HEAD)"
+          } >artifacts/current-main/identity.txt
+
+      - name: Install Rust toolchain
+        uses: moonrepo/setup-rust@abb2d32350334249b178c401e5ec5836e0cd88d3
+        with:
+          cache-base: uv-19671-current-main
+          cache-target: debug
+
+      - name: Format, compile, and run native control
+        working-directory: source
+        run: |
+          set -euo pipefail
+          rustup component add rustfmt
+          cargo fmt --all --check
+          cargo check -p uv
+          cargo test --package uv --test it init::init_package -- --exact
+          cargo build --bin uv
+
+      - name: Run 16-case backend matrix
+        env:
+          UV_NO_PROGRESS: 1
+        run: |
+          set -euo pipefail
+          bash carrier/.github/fieldwork/19671-current-main/backend_matrix.sh \
+            "$PWD/source/target/debug/uv" \
+            "$PWD/artifacts/current-main"
+
+      - name: Verify bounded source diff
+        if: always()
+        run: |
+          set -euo pipefail
+          git -C source diff --check
+          git -C source diff --name-only | sort >final-files.txt
+          if test -f expected-files.txt; then
+            diff -u expected-files.txt final-files.txt
+          fi
+
+      - name: Upload exact current-main evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-19671-current-main-scope-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/current-main/
+          if-no-files-found: warn
+          retention-days: 30
