@@ -1,7 +1,7 @@
 diff --git a/crates/uv-resolver/src/resolver/urls.rs b/crates/uv-resolver/src/resolver/urls.rs
 --- a/crates/uv-resolver/src/resolver/urls.rs
 +++ b/crates/uv-resolver/src/resolver/urls.rs
-@@ -55,16 +55,42 @@ impl Urls {
+@@ -55,16 +55,39 @@ impl Urls {
                  .find(|package_url| same_resource(&package_url.parsed_url, &url.parsed_url, git))
              {
                  // Allow editables to override non-editables.
