@@ -5,11 +5,13 @@ on:
     branches:
       - research/source-provenance-order-20260802
       - research/validate-uv-dev-304-20260803
+      - research/origin-aware-uv-dev-304-20260805
   pull_request:
     branches:
       - main
       - research/upstream-79bb-base
       - research/source-provenance-order-20260802
+      - research/validate-uv-dev-304-20260803
     paths:
       - .github/workflows/fieldwork-source-provenance.yml
       - fieldwork/source-provenance-probe/**
@@ -24,7 +26,7 @@ permissions:
 
 jobs:
   released-versions:
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/research/source-provenance-order-20260802' || (github.event_name == 'pull_request' && github.head_ref != 'research/validate-uv-dev-304-20260803')
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/research/source-provenance-order-20260802' || (github.event_name == 'pull_request' && github.head_ref != 'research/validate-uv-dev-304-20260803' && github.head_ref != 'research/origin-aware-uv-dev-304-20260805')
     name: uv ${{ matrix.uv-version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -63,8 +65,8 @@ jobs:
           if-no-files-found: error
 
   validate-uv-dev-304:
-    if: github.ref == 'refs/heads/research/validate-uv-dev-304-20260803' || github.head_ref == 'research/validate-uv-dev-304-20260803' || github.event_name == 'workflow_dispatch'
-    name: uv-dev #304 broader matrix
+    if: github.ref == 'refs/heads/research/validate-uv-dev-304-20260803' || github.head_ref == 'research/validate-uv-dev-304-20260803' || github.ref == 'refs/heads/research/origin-aware-uv-dev-304-20260805' || github.head_ref == 'research/origin-aware-uv-dev-304-20260805' || github.event_name == 'workflow_dispatch'
+    name: uv-dev #304 origin-aware matrix
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -74,18 +76,31 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify retained draft and audit scripts
+      - name: Verify retained draft and candidate patches
         run: |
           python3 -m py_compile \
             fieldwork/source-provenance-probe/apply_uv_dev_304_build_fix.py
           git apply --check fieldwork/source-provenance-probe/uv-dev-304.diff
+          if test -f fieldwork/source-provenance-probe/uv-dev-304-origin-aware-directory.diff; then
+            git apply fieldwork/source-provenance-probe/uv-dev-304.diff
+            python3 fieldwork/source-provenance-probe/apply_uv_dev_304_build_fix.py
+            git apply --check fieldwork/source-provenance-probe/uv-dev-304-origin-aware-directory.diff
+            git reset --hard HEAD
+          fi
 
-      - name: Apply and fence exact uv-dev #304 draft
+      - name: Apply and fence exact draft plus origin-aware candidate
         run: |
           set -euo pipefail
           mkdir -p fieldwork/source-provenance-probe/out
           git apply fieldwork/source-provenance-probe/uv-dev-304.diff
           python3 fieldwork/source-provenance-probe/apply_uv_dev_304_build_fix.py
+
+          candidate=none
+          if test -f fieldwork/source-provenance-probe/uv-dev-304-origin-aware-directory.diff; then
+            git apply fieldwork/source-provenance-probe/uv-dev-304-origin-aware-directory.diff
+            candidate=requirement-origin-precedence
+          fi
+
           git diff --check
           git diff --name-only | sort > fieldwork/source-provenance-probe/out/draft-files.txt
           test "$(cat fieldwork/source-provenance-probe/out/draft-files.txt)" = "$(printf '%s\n' \
@@ -97,6 +112,7 @@ jobs:
             echo 'public_draft_head=675839b0b1b1c66ee3b02139e1237094722ec2b2'
             echo "carrier_head=$(git rev-parse HEAD)"
             echo 'compile_repair=already-present-in-retained-draft'
+            echo "candidate=$candidate"
           } > fieldwork/source-provenance-probe/out/draft-identity.txt
 
       - name: Install bootstrap uv
@@ -125,13 +141,20 @@ jobs:
 
       - name: Run editable and non-editable matrix
         env:
-          UV_VERSION: uv-dev-304-675839b0
+          UV_VERSION: uv-dev-304-plus-origin-aware-candidate
         run: bash fieldwork/source-provenance-probe/run.sh
 
-      - name: Upload exact draft-validation receipts
+      - name: Run metadata-exact absolute-root authority control
+        env:
+          UV_VERSION: uv-dev-304-plus-origin-aware-candidate
+        run: bash fieldwork/source-provenance-probe/run-authority-negative-control.sh
+
+      - name: Upload exact validation receipts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: uv-dev-304-source-provenance
-          path: fieldwork/source-provenance-probe/out/
+          name: uv-dev-304-origin-aware-source-provenance
+          path: |
+            fieldwork/source-provenance-probe/out/
+            fieldwork/source-provenance-probe/out-authority/
           if-no-files-found: error
