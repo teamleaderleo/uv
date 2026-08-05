@@ -17,6 +17,7 @@ concurrency:
 
 env:
   CANDIDATE_HEAD: 8d9324af47e1b52ec1f57f9232bd408281282cf5
+  INPUT_HEAD: ${{ github.event.pull_request.head.sha }}
   CI: 1
 
 jobs:
@@ -28,13 +29,15 @@ jobs:
       - name: Check out exact experiment
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify experiment fence
+      - name: Verify experiment fence and preserve generators
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$INPUT_HEAD"
           test "$(git merge-base HEAD "$CANDIDATE_HEAD")" = "$CANDIDATE_HEAD"
           expected=$(printf '%s\n' \
             .github/fieldwork/457-b2/inject_generation_rollback.py \
@@ -46,14 +49,19 @@ jobs:
           python -m py_compile \
             .github/fieldwork/457-b2/inject_generation_rollback.py \
             .github/fieldwork/457-b2/polish_generation_rollback.py
+          cp .github/fieldwork/457-b2/inject_generation_rollback.py \
+            "$RUNNER_TEMP/inject_generation_rollback.py"
+          cp .github/fieldwork/457-b2/polish_generation_rollback.py \
+            "$RUNNER_TEMP/polish_generation_rollback.py"
 
       - name: Generate and inspect product source
         shell: bash
         run: |
           set -euo pipefail
+          git checkout --detach "$CANDIDATE_HEAD"
           mkdir -p receipt-source
-          python .github/fieldwork/457-b2/inject_generation_rollback.py
-          python .github/fieldwork/457-b2/polish_generation_rollback.py
+          python "$RUNNER_TEMP/inject_generation_rollback.py"
+          python "$RUNNER_TEMP/polish_generation_rollback.py"
           git diff --check
           test "$(git diff --name-only "$CANDIDATE_HEAD")" = \
             'crates/uv/src/commands/self_update.rs'
@@ -62,7 +70,7 @@ jobs:
           cp crates/uv/src/commands/self_update.rs \
             receipt-source/unformatted-generated-self-update.rs
           {
-            echo "experiment_head=$(git rev-parse HEAD)"
+            echo "experiment_head=$INPUT_HEAD"
             echo "candidate_head=$CANDIDATE_HEAD"
             echo "authority=deterministic-transform-and-exact-diff-only"
             echo "format_compile_test_authority=windows-generation-rollback-job"
@@ -74,7 +82,7 @@ jobs:
         with:
           name: fieldwork-457-b2-generation-rollback-source
           path: receipt-source/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
   generation-rollback:
@@ -85,14 +93,18 @@ jobs:
       - name: Check out exact experiment
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify exact base and experiment fence
+      - name: Verify exact base and preserve generators
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
+          if ((git rev-parse HEAD) -ne $env:INPUT_HEAD) {
+            throw 'Checkout does not match immutable pull-request head'
+          }
           if ((git merge-base HEAD $env:CANDIDATE_HEAD) -ne $env:CANDIDATE_HEAD) {
             throw 'Experiment does not descend from exact public candidate'
           }
@@ -106,9 +118,14 @@ jobs:
             throw "Unexpected experiment diff. Expected: $($expected -join ', '); actual: $($changed -join ', ')"
           }
           git diff --check "$env:CANDIDATE_HEAD..HEAD"
+          Copy-Item .github/fieldwork/457-b2/inject_generation_rollback.py `
+            (Join-Path $env:RUNNER_TEMP 'inject_generation_rollback.py')
+          Copy-Item .github/fieldwork/457-b2/polish_generation_rollback.py `
+            (Join-Path $env:RUNNER_TEMP 'polish_generation_rollback.py')
+          git checkout --detach $env:CANDIDATE_HEAD
           New-Item -ItemType Directory -Force -Path receipt | Out-Null
           @(
-            "experiment_head=$(git rev-parse HEAD)"
+            "experiment_head=$env:INPUT_HEAD"
             "candidate_head=$env:CANDIDATE_HEAD"
             "runner=$env:RUNNER_OS"
           ) | Set-Content receipt/identity.txt
@@ -128,8 +145,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          python .github/fieldwork/457-b2/inject_generation_rollback.py
-          python .github/fieldwork/457-b2/polish_generation_rollback.py
+          python (Join-Path $env:RUNNER_TEMP 'inject_generation_rollback.py')
+          python (Join-Path $env:RUNNER_TEMP 'polish_generation_rollback.py')
+          if (@(git diff --name-only $env:CANDIDATE_HEAD) -ne 'crates/uv/src/commands/self_update.rs') {
+            throw 'Generation changed files outside self_update.rs'
+          }
           rustup component add rustfmt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo fmt --all
@@ -137,6 +157,9 @@ jobs:
           cargo fmt --all --check 2>&1 | Tee-Object -FilePath receipt/fmt.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
+          if (@(git diff --name-only $env:CANDIDATE_HEAD) -ne 'crates/uv/src/commands/self_update.rs') {
+            throw 'Formatting changed files outside self_update.rs'
+          }
           git diff -- crates/uv/src/commands/self_update.rs |
             Set-Content receipt/proposed-source.diff
           Copy-Item crates/uv/src/commands/self_update.rs receipt/generated-self-update.rs
@@ -164,7 +187,7 @@ jobs:
         shell: pwsh
         run: |
           @{
-            experimentHead = (git rev-parse HEAD)
+            experimentHead = $env:INPUT_HEAD
             candidateHead = $env:CANDIDATE_HEAD
             platform = 'windows-latest'
             proposedGuarantee = 'a returned ordinary mutation error restores the pre-update managed generation'
