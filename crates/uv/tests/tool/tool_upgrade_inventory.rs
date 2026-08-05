@@ -24,7 +24,7 @@ fn tool_upgrade_all_propagates_inventory_errors() {
         .assert()
         .failure()
         .stderr(
-            predicate::str::contains("not a valid package")
+            predicate::str::contains("Not a valid package")
                 .and(predicate::str::contains("Nothing to upgrade").not()),
         );
 }
