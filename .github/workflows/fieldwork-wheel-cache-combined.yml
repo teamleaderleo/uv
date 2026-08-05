@@ -1,0 +1,236 @@
+name: Fieldwork combined wheel cache safeguards
+
+on:
+  pull_request:
+    paths:
+      - 'fieldwork/wheel-cache-crash-consistency/**'
+      - 'fieldwork/wheel-cache-generation-lock/apply_generation_lock.py'
+      - '.github/workflows/fieldwork-wheel-cache-combined.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CURRENT_SOURCE_HEAD: 0cf7c4561b7c7159ab9479719a12573d0a6aa3bb
+      CLEAN_SOURCE_BRANCH: fix/validate-and-serialize-wheel-cache
+    steps:
+      - name: Check out exact carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check out exact uv source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fieldwork/upstream-0cf7c456
+          path: uv-current
+          persist-credentials: false
+
+      - name: Verify exact identities and transformations
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git -C uv-current rev-parse HEAD)" = "$CURRENT_SOURCE_HEAD"
+          python3 -m py_compile \
+            fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
+            fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
+            fieldwork/wheel-cache-crash-consistency/repro_missing_http_archive.py \
+            fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
+            fieldwork/wheel-cache-crash-consistency/apply_pointer_regression_test.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py \
+            fieldwork/wheel-cache-generation-lock/apply_generation_lock.py
+          cp -R uv-current uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_regression_test.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-generation-lock/apply_generation_lock.py \
+            uv-transform-check
+          git -C uv-transform-check diff --check
+          test "$(git -C uv-transform-check diff --name-only)" = "$(printf '%s\n' \
+            crates/uv-distribution/src/archive.rs \
+            crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-install-wheel/src/lib.rs \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-installer/src/plan.rs \
+            crates/uv/tests/pip/pip_sync.rs)"
+          rm -rf uv-transform-check
+
+      - name: Build exact baseline
+        working-directory: uv-current
+        run: cargo build --locked --bin uv
+
+      - name: Reproduce baseline corruption and missing targets
+        run: |
+          python3 fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
+            --uv uv-current/target/debug/uv \
+            | tee fieldwork-wheel-cache-combined-corruption-baseline.json
+          python3 fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
+            --uv uv-current/target/debug/uv \
+            | tee fieldwork-wheel-cache-combined-missing-local-baseline.json
+          python3 fieldwork/wheel-cache-crash-consistency/repro_missing_http_archive.py \
+            --uv uv-current/target/debug/uv \
+            | tee fieldwork-wheel-cache-combined-missing-http-baseline.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          corruption = json.loads(
+              Path('fieldwork-wheel-cache-combined-corruption-baseline.json').read_text()
+          )
+          outcomes = {row['mode']: row['outcome'] for row in corruption['scenarios']}
+          assert outcomes == {
+              'clean-control': 'healthy-control',
+              'metadata-zero': 'bug-reproduced',
+              'module-corrupt': 'bug-reproduced',
+          }, outcomes
+          for name in ('local', 'http'):
+              receipt = json.loads(
+                  Path(f'fieldwork-wheel-cache-combined-missing-{name}-baseline.json').read_text()
+              )
+              assert receipt['outcome'] == 'bug-reproduced', receipt
+          PY
+
+      - name: Apply combined safeguards
+        run: |
+          python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_regression_test.py uv-current
+          python3 fieldwork/wheel-cache-generation-lock/apply_generation_lock.py uv-current
+          git -C uv-current diff --check
+          rustup component add rustfmt
+          (cd uv-current && cargo fmt --all)
+          (cd uv-current && cargo fmt --all -- --check)
+          git -C uv-current diff --name-only \
+            > fieldwork-wheel-cache-combined-files.txt
+          test "$(cat fieldwork-wheel-cache-combined-files.txt)" = "$(printf '%s\n' \
+            crates/uv-distribution/src/archive.rs \
+            crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-install-wheel/src/lib.rs \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-installer/src/plan.rs \
+            crates/uv/tests/pip/pip_sync.rs)"
+          git -C uv-current diff --binary \
+            > fieldwork-wheel-cache-combined-tested.patch
+
+      - name: Build combined candidate
+        working-directory: uv-current
+        run: cargo build --locked --bin uv
+
+      - name: Execute combined corruption recovery
+        run: |
+          python3 fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
+            --uv uv-current/target/debug/uv \
+            | tee fieldwork-wheel-cache-combined-corruption-candidate.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(
+              Path('fieldwork-wheel-cache-combined-corruption-candidate.json').read_text()
+          )
+          scenarios = {row['mode']: row for row in receipt['scenarios']}
+          assert scenarios['clean-control']['outcome'] == 'healthy-control', scenarios
+          assert scenarios['metadata-zero']['outcome'] == 'recovered', scenarios
+          assert scenarios['module-corrupt']['outcome'] == 'recovered', scenarios
+          for mode in ('metadata-zero', 'module-corrupt'):
+              assert scenarios[mode]['archive_republished'] is True, scenarios[mode]
+              assert scenarios[mode]['second_verification']['returncode'] == 0, scenarios[mode]
+          PY
+
+      - name: Execute combined missing-target recovery
+        run: |
+          python3 fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
+            --uv uv-current/target/debug/uv \
+            | tee fieldwork-wheel-cache-combined-missing-local-candidate.json
+          python3 fieldwork/wheel-cache-crash-consistency/repro_missing_http_archive.py \
+            --uv uv-current/target/debug/uv \
+            | tee fieldwork-wheel-cache-combined-missing-http-candidate.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          for name in ('local', 'http'):
+              receipt = json.loads(
+                  Path(f'fieldwork-wheel-cache-combined-missing-{name}-candidate.json').read_text()
+              )
+              assert receipt['outcome'] == 'recovered', receipt
+              assert receipt['source_wheel_unchanged'] is True, receipt
+          PY
+
+      - name: Run combined native tests
+        working-directory: uv-current
+        run: |
+          cargo test --locked -p uv-distribution archive::tests
+          cargo test --locked -p uv-distribution \
+            wheel_publication_lock_serializes_link_and_pointer_updates
+          cargo test --locked -p uv-install-wheel wheel::tests
+          cargo test --locked -p uv-installer plan::tests
+          cargo test --locked -p uv --test pip recovers_missing_local_wheel_archive
+
+      - name: Publish exact combined source branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git -C uv-current config user.name "teamleaderleo"
+          git -C uv-current config user.email "13091533+teamleaderleo@users.noreply.github.com"
+          git -C uv-current switch -C "$CLEAN_SOURCE_BRANCH"
+          git -C uv-current add -- \
+            crates/uv-distribution/src/archive.rs \
+            crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-install-wheel/src/lib.rs \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-installer/src/plan.rs \
+            crates/uv/tests/pip/pip_sync.rs
+          git -C uv-current diff --cached --check
+          cmp \
+            fieldwork-wheel-cache-combined-files.txt \
+            <(git -C uv-current diff --cached --name-only)
+          git -C uv-current commit \
+            -m "fix: validate and serialize extracted wheel cache reuse"
+          git -C uv-current push --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${CLEAN_SOURCE_BRANCH}"
+          git -C uv-current rev-parse HEAD \
+            > fieldwork-wheel-cache-combined-clean-head.txt
+
+      - name: Upload exact receipts
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: fieldwork-wheel-cache-combined
+          path: |
+            fieldwork-wheel-cache-combined-corruption-baseline.json
+            fieldwork-wheel-cache-combined-missing-local-baseline.json
+            fieldwork-wheel-cache-combined-missing-http-baseline.json
+            fieldwork-wheel-cache-combined-corruption-candidate.json
+            fieldwork-wheel-cache-combined-missing-local-candidate.json
+            fieldwork-wheel-cache-combined-missing-http-candidate.json
+            fieldwork-wheel-cache-combined-files.txt
+            fieldwork-wheel-cache-combined-tested.patch
+            fieldwork-wheel-cache-combined-clean-head.txt
+          if-no-files-found: warn
+          retention-days: 30
