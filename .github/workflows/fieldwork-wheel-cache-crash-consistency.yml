@@ -44,15 +44,19 @@ jobs:
             fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
             fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
             fieldwork/wheel-cache-crash-consistency/repro_missing_http_archive.py \
-            fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py
+            fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
+            fieldwork/wheel-cache-crash-consistency/apply_pointer_regression_test.py
           cp -R uv-current uv-transform-check
           python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_regression_test.py \
             uv-transform-check
           git -C uv-transform-check diff --check
           test "$(git -C uv-transform-check diff --name-only)" = "$(printf '%s\n' \
             crates/uv-distribution/src/archive.rs \
             crates/uv-distribution/src/distribution_database.rs \
-            crates/uv-installer/src/plan.rs)"
+            crates/uv-installer/src/plan.rs \
+            crates/uv/tests/pip/pip_sync.rs)"
           rm -rf uv-transform-check
 
       - name: Execute bounded crash-state model
@@ -135,6 +139,8 @@ jobs:
         run: |
           python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
             uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_regression_test.py \
+            uv-current
           git -C uv-current diff --check
           (cd uv-current && cargo fmt --all)
           (cd uv-current && cargo fmt --all -- --check)
@@ -145,7 +151,8 @@ jobs:
           test "$(cat fieldwork-wheel-cache-missing-archive-files.txt)" = "$(printf '%s\n' \
             crates/uv-distribution/src/archive.rs \
             crates/uv-distribution/src/distribution_database.rs \
-            crates/uv-installer/src/plan.rs)"
+            crates/uv-installer/src/plan.rs \
+            crates/uv/tests/pip/pip_sync.rs)"
 
       - name: Build current-head candidate uv CLI
         working-directory: uv-current
@@ -192,11 +199,12 @@ jobs:
           assert receipt['source_wheel_unchanged'] is True, receipt
           PY
 
-      - name: Run focused crate tests
+      - name: Run focused native tests
         working-directory: uv-current
         run: |
           cargo test --locked -p uv-distribution archive::tests
           cargo test --locked -p uv-installer plan::tests
+          cargo test --locked -p uv --test pip recovers_missing_local_wheel_archive
 
       - name: Publish exact clean source branch
         env:
@@ -208,14 +216,16 @@ jobs:
           git -C uv-current add -- \
             crates/uv-distribution/src/archive.rs \
             crates/uv-distribution/src/distribution_database.rs \
-            crates/uv-installer/src/plan.rs
+            crates/uv-installer/src/plan.rs \
+            crates/uv/tests/pip/pip_sync.rs
           git -C uv-current diff --cached --check
           git -C uv-current diff --cached --name-only \
             > fieldwork-wheel-cache-clean-source-files.txt
           test "$(cat fieldwork-wheel-cache-clean-source-files.txt)" = "$(printf '%s\n' \
             crates/uv-distribution/src/archive.rs \
             crates/uv-distribution/src/distribution_database.rs \
-            crates/uv-installer/src/plan.rs)"
+            crates/uv-installer/src/plan.rs \
+            crates/uv/tests/pip/pip_sync.rs)"
           git -C uv-current commit -m "fix: ignore cache pointers to missing wheel archives"
           git -C uv-current diff-tree --no-commit-id --name-only -r HEAD \
             > fieldwork-wheel-cache-clean-source-commit-files.txt
