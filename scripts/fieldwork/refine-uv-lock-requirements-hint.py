@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# The carrier applies this refinement after checking out its exact public uv base.
+
 
 def replace_once(path: Path, old: str, new: str) -> None:
     content = path.read_text()
