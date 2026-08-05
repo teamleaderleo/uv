@@ -126,7 +126,7 @@ def install(
     )
 
 
-def benchmark_case(
+def prepare_case(
     uv: str,
     label: str,
     root: Path,
@@ -145,38 +145,63 @@ def benchmark_case(
     create_venv(uv, prime, cwd=case, env=env)
     install(uv, prime, wheel, cwd=case, env=env)
 
-    venvs = []
+    venvs: list[Path] = []
     for index in range(repeats):
         venv = case / f"timed-{index}"
         create_venv(uv, venv, cwd=case, env=env)
         venvs.append(venv)
 
-    durations_ms: list[float] = []
-    cache_hit_receipts: list[bool] = []
-    for venv in venvs:
-        started = time.perf_counter_ns()
-        completed = install(uv, venv, wheel, cwd=case, env=env)
-        elapsed_ms = (time.perf_counter_ns() - started) / 1_000_000
-        durations_ms.append(elapsed_ms)
-        cache_hit_receipts.append("already cached" in completed.stderr)
+    return {
+        "uv": uv,
+        "label": label,
+        "case": case,
+        "env": env,
+        "venvs": venvs,
+        "durations_ms": [],
+        "cache_hit_receipts": [],
+    }
 
+
+def measure_once(prepared: dict[str, Any], wheel: Path, index: int) -> None:
+    started = time.perf_counter_ns()
+    completed = install(
+        prepared["uv"],
+        prepared["venvs"][index],
+        wheel,
+        cwd=prepared["case"],
+        env=prepared["env"],
+    )
+    prepared["durations_ms"].append(
+        (time.perf_counter_ns() - started) / 1_000_000
+    )
+    prepared["cache_hit_receipts"].append("already cached" in completed.stderr)
+
+
+def summarize_case(
+    prepared: dict[str, Any],
+    member_count: int,
+    repeats: int,
+) -> dict[str, Any]:
+    durations_ms = prepared["durations_ms"]
+    cache_hit_receipts = prepared["cache_hit_receipts"]
     verification = run(
         [
-            str(venv_python(venvs[-1])),
+            str(venv_python(prepared["venvs"][-1])),
             "-c",
             f"import {MODULE}; assert {MODULE}.VALUE == 1",
         ],
-        cwd=case,
-        env=env,
+        cwd=prepared["case"],
+        env=prepared["env"],
     )
 
     if not all(cache_hit_receipts):
         raise RuntimeError(
-            f"{label} did not report a cache hit for every timed run: {cache_hit_receipts}"
+            f"{prepared['label']} did not report a cache hit for every timed run: "
+            f"{cache_hit_receipts}"
         )
 
     return {
-        "label": label,
+        "label": prepared["label"],
         "member_count": member_count,
         "repeats": repeats,
         "durations_ms": durations_ms,
@@ -188,11 +213,63 @@ def benchmark_case(
     }
 
 
+def benchmark_pair(
+    baseline_uv: str,
+    candidate_uv: str,
+    root: Path,
+    wheel: Path,
+    member_count: int,
+    repeats: int,
+) -> dict[str, Any]:
+    prepared = {
+        "baseline": prepare_case(
+            baseline_uv,
+            "baseline",
+            root,
+            wheel,
+            member_count,
+            repeats,
+        ),
+        "candidate": prepare_case(
+            candidate_uv,
+            "candidate",
+            root,
+            wheel,
+            member_count,
+            repeats,
+        ),
+    }
+
+    execution_order: list[list[str]] = []
+    for index in range(repeats):
+        order = (
+            ["baseline", "candidate"]
+            if index % 2 == 0
+            else ["candidate", "baseline"]
+        )
+        execution_order.append(order)
+        for label in order:
+            measure_once(prepared[label], wheel, index)
+
+    baseline = summarize_case(prepared["baseline"], member_count, repeats)
+    candidate = summarize_case(prepared["candidate"], member_count, repeats)
+    return {
+        "member_count": member_count,
+        "execution_order": execution_order,
+        "baseline": baseline,
+        "candidate": candidate,
+        "candidate_to_baseline_median_ratio": (
+            candidate["median_ms"] / baseline["median_ms"]
+        ),
+        "median_delta_ms": candidate["median_ms"] - baseline["median_ms"],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline-uv", required=True)
     parser.add_argument("--candidate-uv", required=True)
-    parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--repeats", type=int, default=6)
     parser.add_argument("--counts", type=int, nargs="+", default=[100, 1000, 5000])
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
@@ -206,38 +283,21 @@ def main() -> int:
         cases = []
         for member_count in args.counts:
             wheel = build_wheel(wheel_dir, member_count)
-            baseline = benchmark_case(
-                baseline_uv,
-                "baseline",
-                root,
-                wheel,
-                member_count,
-                args.repeats,
-            )
-            candidate = benchmark_case(
-                candidate_uv,
-                "candidate",
-                root,
-                wheel,
-                member_count,
-                args.repeats,
-            )
             cases.append(
-                {
-                    "member_count": member_count,
-                    "baseline": baseline,
-                    "candidate": candidate,
-                    "candidate_to_baseline_median_ratio": (
-                        candidate["median_ms"] / baseline["median_ms"]
-                    ),
-                    "median_delta_ms": candidate["median_ms"] - baseline["median_ms"],
-                }
+                benchmark_pair(
+                    baseline_uv,
+                    candidate_uv,
+                    root,
+                    wheel,
+                    member_count,
+                    args.repeats,
+                )
             )
 
         print(
             json.dumps(
                 {
-                    "evidence_class": "target-executed-warm-cache-comparison",
+                    "evidence_class": "target-executed-balanced-warm-cache-comparison",
                     "threshold_enforced": False,
                     "platform": platform.platform(),
                     "python": platform.python_version(),
