@@ -6,14 +6,18 @@ on:
       - research/upstream-79bb-base
     paths:
       - .github/workflows/fieldwork-draft-304.yml
-      - fieldwork/source-provenance-probe/**
   workflow_dispatch:
+
+concurrency:
+  group: fieldwork-draft-304-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   draft-304-matrix:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
