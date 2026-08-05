@@ -1,0 +1,144 @@
+name: Fieldwork uv stubs product materialization
+
+on:
+  push:
+    branches:
+      - materialize/19671-current-main-product
+    paths:
+      - .github/fieldwork/19671-product/**
+      - .github/workflows/fieldwork-uv-19671-materialize-product.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-uv-19671-product-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PUBLIC_MAIN: bab65d090d4f05d7dab432ac25304288ff1f2327
+  INIT_BLOB: c9dc1368f3c1f5f6f41098fb22a918cd3a926b4f
+  TEST_BLOB: c5cfa3e334295b4268d5c7afb1b9edaa502731c9
+  CANDIDATE_BRANCH: candidate/19671-current-main-uv-backend-scope
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  materialize-product:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out controlled carrier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: carrier
+
+      - name: Check out exact public main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: astral-sh/uv
+          ref: ${{ env.PUBLIC_MAIN }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+
+      - name: Verify identities and apply product patch
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/product
+          test "$(git -C source rev-parse HEAD)" = "$PUBLIC_MAIN"
+          test "$(git -C source hash-object crates/uv/src/commands/project/init.rs)" = "$INIT_BLOB"
+          test "$(git -C source hash-object crates/uv/tests/project/init.rs)" = "$TEST_BLOB"
+          (
+            cd source
+            python3 ../carrier/.github/fieldwork/19671-product/materialize.py
+          )
+          git -C source diff --check
+          cat >expected-files.txt <<'EOF'
+          crates/uv/src/commands/project/init.rs
+          crates/uv/tests/project/init.rs
+          EOF
+          git -C source diff --name-only | sort >changed-files.txt
+          diff -u expected-files.txt changed-files.txt
+          bash -n carrier/.github/fieldwork/19671-current-main/backend_matrix.sh
+          git -C source diff -- crates/uv/src/commands/project/init.rs crates/uv/tests/project/init.rs \
+            >artifacts/product/product.patch
+          {
+            echo "public_main=$PUBLIC_MAIN"
+            echo "init_blob=$INIT_BLOB"
+            echo "test_blob=$TEST_BLOB"
+            echo "carrier_head=$(git -C carrier rev-parse HEAD)"
+          } >artifacts/product/identity.txt
+
+      - name: Install Rust toolchain
+        uses: moonrepo/setup-rust@abb2d32350334249b178c401e5ec5836e0cd88d3
+        with:
+          cache-base: uv-19671-product
+          cache-target: debug
+
+      - name: Format, compile, and run native regression tests
+        working-directory: source
+        run: |
+          set -euo pipefail
+          rustup component add rustfmt
+          cargo fmt --all --check
+          cargo check -p uv
+          cargo test --package uv --test it init::init_package_stubs_uv_backend -- --exact
+          cargo test --package uv --test it init::init_package_stubs_hatch_backend -- --exact
+          cargo test --package uv --test it init::init_library_stubs_hatch_backend -- --exact
+          cargo test --package uv --test it init::init_package -- --exact
+          cargo test --package uv --test it init::init_library -- --exact
+          cargo build --bin uv
+
+      - name: Run 16-case backend build matrix
+        env:
+          UV_NO_PROGRESS: 1
+        run: |
+          set -euo pipefail
+          bash carrier/.github/fieldwork/19671-current-main/backend_matrix.sh \
+            "$PWD/source/target/debug/uv" \
+            "$PWD/artifacts/product"
+
+      - name: Commit and push bounded product branch
+        working-directory: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --name-only | sort >../final-files.txt
+          diff -u ../expected-files.txt ../final-files.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git switch -c "$CANDIDATE_BRANCH"
+          git add crates/uv/src/commands/project/init.rs crates/uv/tests/project/init.rs
+          git commit -m "Scope stub-only initialization to uv_build"
+          candidate_head=$(git rev-parse HEAD)
+          echo "candidate_head=$candidate_head" >>../artifacts/product/identity.txt
+          git remote add fork "https://x-access-token:${GH_TOKEN}@github.com/teamleaderleo/uv.git"
+          git push --force fork "HEAD:refs/heads/$CANDIDATE_BRANCH"
+
+      - name: Verify bounded source diff
+        if: always()
+        run: |
+          set -euo pipefail
+          git -C source diff --check
+          if test -f expected-files.txt; then
+            git -C source diff "$PUBLIC_MAIN" --name-only | sort >final-tree-files.txt
+            diff -u expected-files.txt final-tree-files.txt
+          fi
+
+      - name: Upload exact product evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-19671-product-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/product/
+          if-no-files-found: warn
+          retention-days: 30
