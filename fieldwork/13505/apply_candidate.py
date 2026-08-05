@@ -45,12 +45,12 @@ def apply_integration_test(root: Path) -> None:
 
         let path = std::env::join_paths(original.iter().chain(&case_variants)).unwrap();
 
-        uv_snapshot!(context.filters(), context.python_list().env(EnvVars::UV_PYTHON_SEARCH_PATH, &path), @\"
+        uv_snapshot!(context.filters(), context.python_list().env(EnvVars::UV_PYTHON_SEARCH_PATH, &path), @"
         exit_code: 0 (success)
         ----- stdout -----
         cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
         cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
-        \"\);
+        ");
     }
 
 """
@@ -62,13 +62,13 @@ def apply_candidate(root: Path) -> None:
     replace_once(
         windows_lib,
         """mod job;
-#[cfg(feature = \"std\")]
+#[cfg(feature = "std")]
 mod spawn;
 """,
         """mod job;
-#[cfg(feature = \"std\")]
+#[cfg(feature = "std")]
 mod path;
-#[cfg(feature = \"std\")]
+#[cfg(feature = "std")]
 mod spawn;
 """,
         "uv-windows module declaration",
@@ -76,13 +76,13 @@ mod spawn;
     replace_once(
         windows_lib,
         """pub use job::{Job, JobError};
-#[cfg(feature = \"std\")]
+#[cfg(feature = "std")]
 pub use spawn::spawn_child;
 """,
         """pub use job::{Job, JobError};
-#[cfg(feature = \"std\")]
+#[cfg(feature = "std")]
 pub use path::path_eq_ignore_case;
-#[cfg(feature = \"std\")]
+#[cfg(feature = "std")]
 pub use spawn::spawn_child;
 """,
         "uv-windows export",
@@ -176,15 +176,15 @@ mod tests {
 
         assert!(insert_seen_path(
             &mut seen_paths,
-            Path::new(r\"C:\\München\\Python\\python.exe\")
+            Path::new(r"C:\München\Python\python.exe")
         ));
         assert!(!insert_seen_path(
             &mut seen_paths,
-            Path::new(r\"c:\\MÜNCHEN\\python\\PYTHON.EXE\")
+            Path::new(r"c:\MÜNCHEN\python\PYTHON.EXE")
         ));
         assert!(insert_seen_path(
             &mut seen_paths,
-            Path::new(r\"C:\\Shims\\python.exe\")
+            Path::new(r"C:\Shims\python.exe")
         ));
     }
 }
