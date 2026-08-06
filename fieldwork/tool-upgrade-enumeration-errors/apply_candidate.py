@@ -34,6 +34,7 @@ text = path.read_text(encoding="utf-8")
 marker = """#[test]
 fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
 """
+# Assert the propagated diagnostic as well as the absence of the old success message.
 test = r'''#[test]
 fn tool_upgrade_all_fails_on_invalid_tool_directory() -> Result<()> {
     let context = uv_test::test_context!("3.12");
