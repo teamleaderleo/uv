@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 # The carrier applies this refinement after checking out its exact public uv base.
+# Carrier fence v2 compares the immutable PR base and head SHAs directly.
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
