@@ -50,7 +50,9 @@ fn tool_upgrade_all_fails_on_invalid_tool_directory() -> Result<()> {
         .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
-        .failure();
+        .failure()
+        .stderr(predicate::str::contains("Not a valid package or extra name"))
+        .stderr(predicate::str::contains("Nothing to upgrade").not());
 
     Ok(())
 }
