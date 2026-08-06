@@ -39,6 +39,7 @@ def run(uv: str, root: Path) -> dict[str, Any]:
         "returncode": completed.returncode,
         "stdout": completed.stdout,
         "stderr": completed.stderr,
+        "reported_inventory_error": "Not a valid package or extra name" in completed.stderr,
         "reported_nothing_to_upgrade": "Nothing to upgrade" in completed.stderr,
     }
 
@@ -56,8 +57,20 @@ def main() -> int:
     print(json.dumps(result, indent=2, sort_keys=True))
 
     if args.expect == "hidden":
-        return 0 if result["returncode"] == 0 and result["reported_nothing_to_upgrade"] else 1
-    return 0 if result["returncode"] != 0 and not result["reported_nothing_to_upgrade"] else 1
+        return (
+            0
+            if result["returncode"] == 0
+            and result["reported_nothing_to_upgrade"]
+            and not result["reported_inventory_error"]
+            else 1
+        )
+    return (
+        0
+        if result["returncode"] != 0
+        and result["reported_inventory_error"]
+        and not result["reported_nothing_to_upgrade"]
+        else 1
+    )
 
 
 if __name__ == "__main__":
