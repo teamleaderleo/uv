@@ -8,6 +8,7 @@ use fs_err as fs;
 use indoc::{formatdoc, indoc};
 use predicates::Predicate;
 use url::Url;
+use walkdir::WalkDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -177,6 +178,79 @@ fn install_copy() -> Result<()> {
     context
         .assert_command("from markupsafe import Markup")
         .success();
+
+    Ok(())
+}
+
+/// Re-extract a local wheel when its cached archive target has disappeared.
+#[test]
+fn recovers_missing_local_wheel_archive() -> Result<()> {
+    fn find_archive(cache: &std::path::Path) -> std::path::PathBuf {
+        let metadata = WalkDir::new(cache)
+            .into_iter()
+            .filter_map(|entry| entry.ok())
+            .find(|entry| {
+                entry.file_type().is_file()
+                    && entry.file_name() == "METADATA"
+                    && entry
+                        .path()
+                        .parent()
+                        .and_then(std::path::Path::file_name)
+                        .is_some_and(|name| name.to_string_lossy() == "tomli-2.0.1.dist-info")
+            })
+            .expect("cached tomli metadata");
+
+        metadata
+            .path()
+            .ancestors()
+            .find(|ancestor| {
+                ancestor
+                    .parent()
+                    .and_then(std::path::Path::file_name)
+                    .is_some_and(|name| name.to_string_lossy().starts_with("archive-v"))
+            })
+            .expect("archive root")
+            .to_path_buf()
+    }
+
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.child("tomli-2.0.1-py3-none-any.whl");
+    download_to_disk(
+        "https://files.pythonhosted.org/packages/97/75/10a9ebee3fd790d20926a90a2547f0bf78f371b2f13aa822c759680ca7b9/tomli-2.0.1-py3-none-any.whl",
+        &wheel,
+    );
+    let wheel_before = fs::read(wheel.path())?;
+
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str(&format!(
+        "tomli @ {}",
+        Url::from_file_path(wheel.path()).unwrap()
+    ))?;
+
+    context
+        .pip_sync()
+        .arg("requirements.txt")
+        .arg("--strict")
+        .assert()
+        .success();
+    context.assert_command("import tomli").success();
+
+    let first_archive = find_archive(context.cache_dir.path());
+    fs::remove_dir_all(&first_archive)?;
+    assert!(!first_archive.exists());
+
+    context.reset_venv();
+    context
+        .pip_sync()
+        .arg("requirements.txt")
+        .arg("--strict")
+        .assert()
+        .success();
+    context.assert_command("import tomli").success();
+
+    let second_archive = find_archive(context.cache_dir.path());
+    assert_ne!(first_archive, second_archive);
+    assert_eq!(wheel_before, fs::read(wheel.path())?);
 
     Ok(())
 }
