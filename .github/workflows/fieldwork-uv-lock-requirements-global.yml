@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | sort > "$RUNNER_TEMP/carrier-files.txt"
+          git diff --name-only "${{ github.event.pull_request.base.sha }}"..."${{ github.event.pull_request.head.sha }}" | sort > "$RUNNER_TEMP/carrier-files.txt"
           printf '%s\n' scripts/fieldwork/refine-uv-lock-requirements-hint.py > "$RUNNER_TEMP/expected-carrier-files.txt"
           diff -u "$RUNNER_TEMP/expected-carrier-files.txt" "$RUNNER_TEMP/carrier-files.txt"
           cp scripts/fieldwork/refine-uv-lock-requirements-hint.py "$RUNNER_TEMP/refine.py"
