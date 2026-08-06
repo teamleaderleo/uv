@@ -37,6 +37,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git fetch https://github.com/astral-sh/uv "$UV_BASE"
           git checkout --detach "$UV_BASE"
           git diff "$SOURCE_BASE" "$SOURCE_COMMIT" -- . ':(exclude)Cargo.lock' > "$RUNNER_TEMP/source-without-lock.patch"
           git apply --3way --whitespace=error-all "$RUNNER_TEMP/source-without-lock.patch"
