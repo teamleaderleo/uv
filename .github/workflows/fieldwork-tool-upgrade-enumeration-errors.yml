@@ -3,8 +3,8 @@ name: Fieldwork tool upgrade enumeration errors
 on:
   pull_request:
     paths:
-      - 'fieldwork/tool-upgrade-enumeration-errors/**'
-      - '.github/workflows/fieldwork-tool-upgrade-enumeration-errors.yml'
+      - "fieldwork/tool-upgrade-enumeration-errors/**"
+      - ".github/workflows/fieldwork-tool-upgrade-enumeration-errors.yml"
   workflow_dispatch:
 
 permissions:
