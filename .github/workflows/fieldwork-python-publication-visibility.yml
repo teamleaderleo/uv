@@ -1,0 +1,65 @@
+name: Fieldwork managed Python publication visibility
+
+on:
+  pull_request:
+    paths:
+      - "fieldwork/python-publication-visibility-probe/**"
+      - ".github/workflows/fieldwork-python-publication-visibility.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CURRENT_SOURCE_HEAD: 544157b31dbc6007bfdfe2789d3d068278fdb57d
+    steps:
+      - name: Check out exact carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check out exact uv source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fieldwork/upstream-544157
+          path: uv-current
+          persist-credentials: false
+
+      - name: Apply exact visibility probe
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git -C uv-current rev-parse HEAD)" = "$CURRENT_SOURCE_HEAD"
+          python3 -m py_compile fieldwork/python-publication-visibility-probe/apply_probe.py
+          python3 fieldwork/python-publication-visibility-probe/apply_probe.py uv-current
+          git -C uv-current diff --check
+          rustup component add rustfmt
+          (cd uv-current && cargo fmt --all)
+          (cd uv-current && cargo fmt --all -- --check)
+          test "$(git -C uv-current diff --name-only)" = "$(printf '%s\n' \
+            crates/uv/src/commands/python/install.rs \
+            crates/uv/tests/python/python_install.rs)"
+          git -C uv-current diff --binary > managed-python-publication-visibility.patch
+
+      - name: Execute publication visibility test
+        working-directory: uv-current
+        run: |
+          cargo test --locked -p uv --test python --features test-python-managed \
+            python_install::python_install_is_discoverable_before_finalization -- --exact --nocapture
+
+      - name: Upload exact probe patch
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: fieldwork-python-publication-visibility
+          path: managed-python-publication-visibility.patch
+          if-no-files-found: warn
+          retention-days: 30
