@@ -1,0 +1,107 @@
+name: Fieldwork UV manifest lane
+
+on:
+  pull_request:
+    branches:
+      - research/validate-uv-dev-304-20260803
+    paths:
+      - .github/workflows/fieldwork-manifest-lane.yml
+      - fieldwork/source-provenance-probe/**
+  workflow_dispatch:
+
+concurrency:
+  group: fieldwork-manifest-lane-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'research/manifest-lane-uv-dev-304-20260806'
+    name: manifest-lane provenance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out validation branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify retained draft and candidate transform
+        run: |
+          python3 -m py_compile \
+            fieldwork/source-provenance-probe/apply_uv_dev_304_build_fix.py \
+            fieldwork/source-provenance-probe/apply_manifest_lane_candidate.py
+          git apply --check fieldwork/source-provenance-probe/uv-dev-304.diff
+
+      - name: Apply and fence exact draft plus manifest-lane candidate
+        run: |
+          set -euo pipefail
+          mkdir -p fieldwork/source-provenance-probe/out
+          git apply fieldwork/source-provenance-probe/uv-dev-304.diff
+          python3 fieldwork/source-provenance-probe/apply_uv_dev_304_build_fix.py
+          python3 fieldwork/source-provenance-probe/apply_manifest_lane_candidate.py
+          git diff --check
+          git diff --name-only | sort > fieldwork/source-provenance-probe/out/candidate-files.txt
+          test "$(cat fieldwork/source-provenance-probe/out/candidate-files.txt)" = "$(printf '%s\n' \
+            crates/uv-resolver/src/lock/mod.rs \
+            crates/uv-resolver/src/manifest.rs \
+            crates/uv-resolver/src/resolver/urls.rs \
+            crates/uv/tests/lock/lock.rs)"
+          git diff --binary > fieldwork/source-provenance-probe/out/manifest-lane-candidate.patch
+          {
+            echo 'public_draft_head=675839b0b1b1c66ee3b02139e1237094722ec2b2'
+            echo "carrier_head=$(git rev-parse HEAD)"
+            echo 'candidate=manifest-root-context-lane'
+          } > fieldwork/source-provenance-probe/out/candidate-identity.txt
+
+      - name: Install bootstrap uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.12.1
+          enable-cache: false
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Check Rust formatting
+        run: |
+          rustup component add rustfmt
+          cargo fmt --all --check
+
+      - name: Build patched uv
+        run: cargo build --bin uv
+
+      - name: Put patched uv first on PATH
+        run: |
+          mkdir -p "$RUNNER_TEMP/fieldwork-bin"
+          ln -s "$GITHUB_WORKSPACE/target/debug/uv" "$RUNNER_TEMP/fieldwork-bin/uv"
+          echo "$RUNNER_TEMP/fieldwork-bin" >> "$GITHUB_PATH"
+
+      - name: Verify patched binary identity
+        run: |
+          command -v uv
+          uv --version
+          git diff --stat
+
+      - name: Run editable and non-editable matrix
+        env:
+          UV_VERSION: uv-dev-304-plus-manifest-lane-candidate
+        run: bash fieldwork/source-provenance-probe/run.sh
+
+      - name: Run valid root-versus-lookahead control
+        env:
+          UV_VERSION: uv-dev-304-plus-manifest-lane-candidate
+        run: bash fieldwork/source-provenance-probe/run-root-lookahead-control.sh
+
+      - name: Upload exact validation receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-dev-304-manifest-lane-provenance
+          path: |
+            fieldwork/source-provenance-probe/out/
+            fieldwork/source-provenance-probe/out-root-lookahead/
+          if-no-files-found: error
