@@ -59,6 +59,7 @@ jobs:
           test "$(git -C source hash-object crates/uv/src/commands/project/add.rs)" = "$ADD_BLOB"
           test "$(git -C source hash-object crates/uv/tests/project/edit.rs)" = "$EDIT_BLOB"
           python3 -m py_compile carrier/.github/fieldwork/20678-current-main/apply_root_authority.py
+          python3 -m py_compile carrier/.github/fieldwork/20678-current-main/repair_index_borrow.py
           bash -n carrier/.github/fieldwork/20678-current-main/replay_matrix.sh
           {
             echo "public_main=$PUBLIC_MAIN"
@@ -91,6 +92,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 ../carrier/.github/fieldwork/20678-current-main/apply_root_authority.py
+          python3 ../carrier/.github/fieldwork/20678-current-main/repair_index_borrow.py
           git diff --check
           printf '%s\n' \
             crates/uv/src/commands/project/add.rs \
