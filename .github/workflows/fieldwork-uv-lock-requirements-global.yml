@@ -45,6 +45,7 @@ jobs:
           git checkout --detach "$UV_BASE"
           git diff "$SOURCE_BASE" "$SOURCE_COMMIT" -- . ':(exclude)Cargo.lock' > "$RUNNER_TEMP/source-without-lock.patch"
           git apply --3way --whitespace=error-all "$RUNNER_TEMP/source-without-lock.patch"
+          git reset
           python "$RUNNER_TEMP/refine.py"
           git add -N crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
           cargo fmt --all
