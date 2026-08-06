@@ -6,6 +6,7 @@ from pathlib import Path
 # The carrier applies this refinement after fetching exact public uv base
 # b358fb6fce199fb1977913d310ddb6d573e44031 from astral-sh/uv.
 # Carrier fence v2 compares the immutable PR base and head SHAs directly.
+# Rust 1.97.1 rustfmt and clippy are installed explicitly by the carrier.
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
