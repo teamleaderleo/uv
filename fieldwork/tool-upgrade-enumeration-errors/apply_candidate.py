@@ -35,7 +35,7 @@ marker = """#[test]
 fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
 """
 # Assert the propagated diagnostic as well as the absence of the old success message.
-test = r'''#[test]
+test = r"""#[test]
 fn tool_upgrade_all_fails_on_invalid_tool_directory() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let tool_dir = context.temp_dir.child("tools");
@@ -58,7 +58,7 @@ fn tool_upgrade_all_fails_on_invalid_tool_directory() -> Result<()> {
     Ok(())
 }
 
-'''
+"""
 if text.count(marker) != 1:
     raise SystemExit("tool-upgrade test insertion point mismatch")
 path.write_text(text.replace(marker, test + marker), encoding="utf-8")
