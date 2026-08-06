@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      UV_BASE: 4d5ad0f61ab331d01ad46ecfb4cbf278b691b038
+      UV_BASE: b358fb6fce199fb1977913d310ddb6d573e44031
       SOURCE_BASE: 49e2fc5c821bb69a528308a036b17446bb5ab5a6
       SOURCE_COMMIT: 51c9fe109f037d084fd17647dc78a6451c2938f2
-      SOURCE_BRANCH: candidate/uv-lock-requirements-hint-current-v3
+      SOURCE_BRANCH: candidate/uv-lock-requirements-hint-current-v4
     steps:
       - name: Check out carrier
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
