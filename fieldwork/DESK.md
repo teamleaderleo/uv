@@ -46,14 +46,22 @@ This is the review surface for completed evidence and decisions. Work does not m
 
 ### Iterator-level root versus lookahead provenance
 
-Preserve the existing requirement ordering, but carry an explicit collection-local authority tag from `Manifest` into `Urls::from_manifest`:
+**Carrier:** fork PR `teamleaderleo/uv#55`.
 
-- lookahead metadata;
-- root/workspace requirements;
-- user constraints;
-- overrides on their existing separate path.
+**Head:** `6ef55ad6ff9eb092d0eda3cea61fd368e400e729` on `research/manifest-lane-uv-dev-304-20260806`.
 
-The next candidate must repair the non-editable matrix while preserving intentionally absolute root input. No result is claimed yet.
+**Focused run:** `31102875925`, queued at this refresh. No result is claimed.
+
+The candidate preserves existing requirement ordering while carrying one collection-local `root_context` bit from `Manifest` into `Urls::from_manifest`:
+
+- lookahead metadata: false;
+- root/workspace requirements: true;
+- user constraints: true;
+- overrides: unchanged on their existing separate path.
+
+Evidence includes the unchanged eight-observation issue matrix and a valid reverse-direction control where the root is absolute while a local parent supplies a relative project source. The control must preserve an absolute selected child source and relative parent metadata in both dependency orders.
+
+**Design note:** `fieldwork/source-provenance-probe/checkpoints/2026-08-06-manifest-lane-candidate.md`.
 
 ### Deferred discriminators
 
