@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The carrier applies this refinement after checking out its exact public uv base.
+# The carrier applies this refinement after checking out exact uv base
+# b358fb6fce199fb1977913d310ddb6d573e44031.
 # Carrier fence v2 compares the immutable PR base and head SHAs directly.
 
 
