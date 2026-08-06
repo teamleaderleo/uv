@@ -1,175 +1,179 @@
 # UV local-source provenance research
 
-Date: 2026-08-05  
-State: `FINDING CONFIRMED; ROOT-VS-LOOKAHEAD REPAIR UNDER EXECUTION; UPSTREAM CONTACT NOT AUTHORIZED`
+Date: 2026-08-06  
+State: `FINDING CONFIRMED; ITERATOR-LEVEL AUTHORITY REPAIR NEXT; UPSTREAM CONTACT NOT AUTHORIZED`
 
-Exact original upstream base:
-`astral-sh/uv@79bbface771210df216b738e9bdc7df95e5a9e6b`.
+Review index: `fieldwork/DESK.md`.
 
-Current focused carrier:
-`teamleaderleo/uv#40` at `93b930ba940dc0ae5f84a774aa35baa87658a043`.
-
-Completed carriers #11, #27, #37, and #38 are closed without merge. Their branches and receipts remain preserved.
+Exact original upstream base: `astral-sh/uv@79bbface771210df216b738e9bdc7df95e5a9e6b`.
 
 ## Confirmed regression
 
 The bug reported as “relative editable paths become absolute through a transitive Poetry dependency” is a broader local-directory provenance regression.
 
-When a root project selects a local child directory through a relative `[tool.uv.sources]` path, and a local parent emits an equivalent absolute path dependency in metadata, uv 0.10.10 and 0.12.1 serialize the child as absolute in both:
+When a root project selects a local child directory through a relative `[tool.uv.sources]` path, and a local parent emits an equivalent absolute path dependency in metadata, UV 0.10.10 and 0.12.1 serialize the child as absolute in both:
 
 1. the child package `source` entry;
 2. the parent package `requires-dist` metadata entry.
 
-The same failure occurs for editable and non-editable directories. uv 0.10.0 keeps both representations relative.
+The same failure occurs for editable and non-editable directories. UV 0.10.0 keeps both representations relative.
 
-## Release matrix receipt
+### Release matrix receipt
 
-Workflow run: `30752194973`  
-Generated merge: `00ee711a4e5ac995adf70529f3fa66357f067967`
+- workflow run: `30752194973`;
+- generated merge: `00ee711a4e5ac995adf70529f3fa66357f067967`;
+- UV 0.10.0 artifact: `8834793365`, ZIP SHA-256 `a909d2961705d226cadbf08587b8ced337ef81557203480c885fa6f8541d2941`;
+- UV 0.10.10 artifact: `8834792931`, ZIP SHA-256 `5dccfdfaa039aecc71c87c66ac86deb2e9d3420e6790d7b85bd66e12578f8256`;
+- UV 0.12.1 artifact: `8834793219`, ZIP SHA-256 `58cac6f794e65adc8194869cb7423139035a9671f16348217953f8a5bdb72d4b`.
 
-| uv | editable | non-editable | dependency order | cold/warm |
-| --- | --- | --- | --- | --- |
-| 0.10.0 | 0/4 source and 0/4 metadata absolute | 0/4 source and 0/4 metadata absolute | invariant | invariant |
-| 0.10.10 | 4/4 source and 4/4 metadata absolute | 4/4 source and 4/4 metadata absolute | invariant | invariant |
-| 0.12.1 | 4/4 source and 4/4 metadata absolute | 4/4 source and 4/4 metadata absolute | invariant | invariant |
+The corrected probe normalizes each disposable case root. Every executed dependency-order and cold/warm comparison was invariant. No executed evidence supports a nondeterminism claim.
 
-Artifacts:
+## Exact draft `uv-dev#304` boundary
 
-| uv | artifact | ZIP SHA-256 |
-| --- | ---: | --- |
-| 0.10.0 | `8834793365` | `a909d2961705d226cadbf08587b8ced337ef81557203480c885fa6f8541d2941` |
-| 0.10.10 | `8834792931` | `5dccfdfaa039aecc71c87c66ac86deb2e9d3420e6790d7b85bd66e12578f8256` |
-| 0.12.1 | `8834793219` | `58cac6f794e65adc8194869cb7423139035a9671f16348217953f8a5bdb72d4b` |
+Public issue `astral-sh/uv#20477` is represented by draft `astral-sh/uv-dev#304` at exact head `675839b0b1b1c66ee3b02139e1237094722ec2b2`.
 
-No executed order/cache matrix supports a nondeterminism claim.
+Exact execution:
 
-## Exact draft #304 boundary
-
-Public issue `astral-sh/uv#20477` is represented by private draft `astral-sh/uv-dev#304` at exact head `675839b0b1b1c66ee3b02139e1237094722ec2b2`.
-
-Exact receipt:
-
-- carrier head: `1f7a809966f0f7689ba0245ec20215ee83ceb8d3`;
+- tested carrier head: `1f7a809966f0f7689ba0245ec20215ee83ceb8d3`;
 - workflow run: `30930801134`;
 - job: `92064683893`;
 - artifact: `8903364962`;
-- artifact ZIP SHA-256: `4260448eb9334622e737435d55e33ebb39addfb2c1bb2f73b675cba5eff1b3c7`.
+- ZIP SHA-256: `4260448eb9334622e737435d55e33ebb39addfb2c1bb2f73b675cba5eff1b3c7`.
 
-| mode | source | parent metadata |
-| --- | --- | --- |
-| editable, 4 observations | all relative | all relative |
-| non-editable, 4 observations | all absolute | all absolute |
+Result:
 
-The draft fixes the reported editable case but not the ordinary non-editable sibling.
+- editable package sources: relative in `4/4` observations;
+- editable parent metadata: relative in `4/4` observations;
+- non-editable package sources: absolute in `4/4` observations;
+- non-editable parent metadata: absolute in `4/4` observations.
 
-An early retained copy lacked a semicolon. The currently retained exact draft includes it and builds; that syntax failure is historical execution context, not a current defect in `675839b0...`.
+The draft fixes the reported editable case but not its ordinary non-editable sibling.
 
-## Why draft #304 stops at editability
+An early retained copy lacked a semicolon. The currently retained exact draft includes it and builds. The syntax failure is historical execution context, not a defect in the retained head.
 
-The draft preserves a relative selected URL only through an editable-specific merge branch. Its lock serializer repairs generated metadata only when the selected distribution still carries a relative `VerbatimUrl`.
+## Why the draft stops at editability
 
-In the non-editable collision, URL selection can discard the root-relative spelling first. The serializer then sees an absolute selected distribution, excludes it from `relative_sources`, and cannot reconstruct the lost intent.
+The draft preserves a relative selected URL through an editable-specific merge branch. Its lock serializer can repair generated metadata only when the selected distribution still carries a relative `VerbatimUrl`.
+
+In the non-editable collision, URL selection can discard the root-relative spelling first. The serializer then sees an absolute selected distribution, excludes it from `relative_sources`, and cannot reconstruct the lost presentation intent.
 
 Resource identity, install mode, and presentation authority are separate properties.
 
 ## Completed spelling-only experiment
 
-Fork PR #37 tested “relative directory spelling wins; editability merges independently.”
+Fork PR `teamleaderleo/uv#37` tested this rule after exact draft #304:
+
+- equivalent local directories prefer the relative spelling;
+- editability merges independently;
+- non-directory URL behavior remains unchanged.
 
 Exact successful receipt:
 
-- head: `de93ecfc9e71af8ec15383beb287d320f38426ce`;
+- candidate head: `de93ecfc9e71af8ec15383beb287d320f38426ce`;
 - generated merge: `56fb08842285b31145b61a0cc029618e12514269`;
-- run: `30969832800`;
+- workflow run: `30969832800`;
 - job: `92191555060`;
 - artifact: `8916217206`;
 - ZIP SHA-256: `a631be2fb7773030e5e031b759e49e48f95c86973d528301e616890fd8f0ba97`.
 
-It produced zero absolute source or metadata records across all eight observations and preserved editable state.
+It produced zero absolute package-source records and zero absolute parent-metadata records across all eight observations. All editable package sources remained editable.
 
-It is rejected as a final policy. `Manifest::requirements_no_overrides` emits lookahead requirements before root requirements. Universal relative precedence can therefore preserve generated relative metadata over an explicitly absolute root declaration, violating behavior established by `astral-sh/uv#18176`.
+The experiment is rejected as a final policy. `Manifest::requirements_no_overrides` emits lookahead requirements before root requirements. Universal relative precedence can therefore retain lower-authority relative input over an intentionally absolute root declaration.
 
-## Current root-versus-lookahead candidate
+## Rejected `RequirementOrigin` experiment
 
-`Requirement` already carries `origin: Option<RequirementOrigin>`.
+Fork PR `teamleaderleo/uv#40` retained `requirement.origin.is_some()` beside each URL during collection. For equivalent directories it attempted to let origin-bearing input outrank origin-free input while merging editability independently.
 
-The source trace shows:
+Exact execution:
 
-1. root/workspace lowering assigns a requirement origin;
-2. built metadata requirements ordinarily enter lookahead without that root/file origin;
-3. lookahead forwards lowered metadata requirements into `RequestedRequirements`;
-4. `Manifest` flattens lookahead before root requirements;
-5. `Urls::from_manifest` discards `requirement.origin` when it stores only `VerbatimParsedUrl`.
-
-PR #40 retains `origin.is_some()` beside each URL during collection. For equivalent local directories it lets root/file-context spelling beat origin-free lookahead spelling, while merging editability independently. Equal-authority and override behavior remain on their existing paths; the sidecar is removed before downstream interfaces.
-
-This is deliberately narrower than “all authored input wins.” A transitive local project’s explicit `tool.uv.sources` can lower a metadata requirement while its public requirement origin remains unset.
-
-### Active execution
-
-- fork PR: `teamleaderleo/uv#40`;
-- head: `93b930ba940dc0ae5f84a774aa35baa87658a043`;
+- candidate head: `93b930ba940dc0ae5f84a774aa35baa87658a043`;
 - generated merge: `00031f058443bd64cd6c7fca82de959ac09a3b07`;
-- Fieldwork run: `30971266038`;
+- workflow run: `30971266038`;
 - job: `92195886434`;
-- current state at this checkpoint: queued; no result claimed.
+- artifact: `8917108456`;
+- ZIP SHA-256: `c2740df77257e0ce615d4ec8aed5d347e2d0d21d5f5c34f5186df917e9daa43e`.
 
-The run builds exact draft #304 plus the root-context sidecar and executes:
+The patch applied, compiled, and completed the original eight-observation matrix.
 
-1. the unchanged eight-case editable/non-editable/order/cache matrix;
-2. a metadata-exact negative control where the root declares `child` absolutely and a dependency-free backend emits `Requires-Dist: child @ file:../child`.
+Result:
 
-The control preflight-verifies that exact metadata line and refuses a vacuous result.
+- editable package sources and parent metadata remained relative in all `4/4` observations;
+- non-editable package sources remained absolute in all `4/4` observations;
+- non-editable parent metadata remained absolute in all `4/4` observations;
+- dependency-order and cold/warm comparisons remained invariant.
 
-Success requires:
+Therefore `origin.is_some()` did not distinguish the root-relative non-editable declaration from the replacing lookahead requirement in this resolver path. It is not a sufficient authority signal for the repair.
 
-- original issue matrix: all relative root declarations remain relative;
-- authority control: the selected child package source remains explicitly absolute in both dependency orders;
-- editability remains preserved;
-- no dependency-order variance.
+### Invalid negative control
 
-## Additional source boundaries recorded
+The accompanying custom backend emitted the exact metadata line:
+
+```text
+Requires-Dist: child @ file:../child
+```
+
+UV then correctly rejected that built metadata before resolution:
+
+```text
+relative path without a working directory: ../child
+```
+
+Core Metadata does not provide a working directory for that relative direct URL. The control is invalid and establishes no authority result.
+
+A future control must use a source context that legitimately carries a relative path, such as local-project source lowering, and must separately prove the competing spellings reached URL collection.
+
+### Repository CI classification
+
+Rust formatting and Python formatting passed. Prettier failed only on the prior `FINDINGS.md` formatting. That documentation issue is separate from the semantic rejection above.
+
+## Next repair direction
+
+Do not add another spelling heuristic and do not broaden `RequirementOrigin` by intuition.
+
+The next candidate should preserve provenance explicitly at the point where `Manifest` still knows the iterator lane. URL collection needs a collection-local authority tag that distinguishes at least:
+
+- lookahead requirements;
+- root or workspace requirements;
+- user constraints;
+- overrides, which remain on their existing separate replacement path.
+
+The candidate should preserve the current requirement ordering and downstream URL interfaces. It should carry the authority tag only through equivalent-resource selection, merge editability independently, then drop the tag.
+
+Required evidence:
+
+1. the unchanged editable and non-editable issue matrix;
+2. an intentionally absolute root-source control using a valid competing lower-authority source context;
+3. proof that both competing spellings reached URL collection;
+4. dependency-order invariance;
+5. exact changed-file fencing and retained artifact receipts.
+
+## Additional source boundaries
 
 ### Symlink aliases
 
-Directory equality accepts `same_file::is_same_file`, but draft #304 repairs parent metadata through exact `(name, install_path)` lookup. A relative alias and absolute real path can therefore merge as one source while failing the later exact metadata lookup. This is a source-supported hypothesis, not yet an executed finding.
+Directory equality accepts `same_file::is_same_file`, while draft #304 repairs parent metadata through exact `(name, install_path)` lookup. A relative alias and an absolute real path can merge as one source while failing the later exact metadata lookup. This is a source-supported hypothesis, not an executed finding.
 
 ### `pylock.toml`
 
-Direct resolution-to-pylock export uses the selected distribution URL and `was_given_absolute()`. Lock-to-pylock export uses the source spelling stored in `uv.lock`. Directory provenance is therefore downstream of URL selection and lock serialization; a pylock-only relativizer would be too late. Local wheel/archive policy from issue #16299 remains separate.
+Direct resolution-to-pylock export uses the selected distribution URL and `was_given_absolute()`. Lock-to-pylock export uses the source spelling stored in `uv.lock`. Directory provenance is downstream of URL selection and lock serialization; a pylock-only relativizer would be too late.
+
+Local wheel and archive export policy from issue `astral-sh/uv#16299` remains separate.
 
 ### Live upstream state
 
-Current public `main` still contains the original equivalent-URL replacement behavior. No independent public repair has landed in URL collection.
+The inspected public `main` still contains the original equivalent-URL replacement behavior. No independent public repair had landed at the last check.
 
 ## Directions declined or deferred
 
-- **Blind serializer relativization:** cannot distinguish intentional absolute root input after authority is lost.
-- **Metadata-only repair:** leaves the child package source absolute.
-- **Poetry-version hunting:** a dependency-free backend reproduces the relevant metadata shape.
-- **Async nondeterminism claims:** unsupported by executed order/cache matrices.
-- **Universal relative precedence:** passes the issue fixture but violates explicit-absolute authority.
-- **A new broad provenance enum immediately:** existing `RequirementOrigin` is sufficient to test the first root-versus-lookahead boundary.
-- **Symlink, Windows, archive, or pylock implementation first:** dominated by the unresolved root-authority rule.
-- **A competing upstream patch:** Astral has an active draft and upstream contact is not authorized.
-
-## Workflow hygiene repair
-
-Baseline PR #11 and exact-draft PR #27 were closed after their receipts were preserved. Their Fieldwork workflows were made manual/skip-only so note commits no longer rerun captured matrices or repository-wide CI through those carriers. Focused execution remains in PR #40.
-
-## Next probes after PR #40
-
-If the root-context candidate passes:
-
-1. rename overbroad internal `authored` wording to `root_context`;
-2. add upstream-shaped non-editable and explicit-absolute regression coverage;
-3. test two origin-free lookahead projects with conflicting spellings;
-4. test root requirement versus constraint and group authority;
-5. execute the symlink alias mismatch;
-6. compare direct and lock-based pylock directory export;
-7. test existing-lock relocking, Windows drive/UNC paths, and local archives.
-
-If it fails, inspect the actual requirement origins at URL collection before adding a new authority model.
+- blind serializer relativization;
+- metadata-only repair;
+- Poetry-version hunting;
+- asynchronous nondeterminism claims;
+- universal relative precedence;
+- treating `origin.is_some()` as authority;
+- a broad provenance enum before iterator-level evidence;
+- symlink, Windows, archive, or pylock implementation before the ordinary directory authority rule;
+- a competing upstream patch while Astral has an active draft and upstream contact is not authorized.
 
 ## External-contact state
 
