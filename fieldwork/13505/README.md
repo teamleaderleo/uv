@@ -3,49 +3,48 @@
 Observed upstream report: https://redirect.github.com/astral-sh/uv/issues/13505  
 Related completed report: https://redirect.github.com/astral-sh/uv/issues/9979  
 Related historical change: https://redirect.github.com/astral-sh/uv/pull/12628  
-Inspected fork head: `1da26a68629be6ae5fd7f924a7d49ff54763a7df`  
+Inspected fork base: `1da26a68629be6ae5fd7f924a7d49ff54763a7df`  
 External contact: **not authorized and not performed**
 
 ## Current classification
 
-`EXECUTION PREPARED — final-stage dedup regression; Windows baseline/candidate matrix required`
+`SOURCE/HISTORY MAPPED — DUPLICATED-PATH REPRODUCER ABSENT — CANDIDATE UNEXECUTED`
 
 The historical fix intentionally changed `uv python list` to display the queried executable path (`Interpreter::real_executable`) rather than Python's resolved `sys.executable`. That preserves useful information about shims and search-path entries.
 
-The current listing command collects those queried paths and then removes duplicates with an `FxHashSet<PathBuf>`. Rust path equality is lexical and case-sensitive, so two Windows spellings such as `C:\Python312\python.exe` and `c:\python312\python.exe` survive as separate rows even though Windows resolves their casing equivalently.
+The final listing command removes duplicate queried paths with an `FxHashSet<PathBuf>`. Rust path equality is lexical and case-sensitive, so the final-stage code can retain Windows case variants. The public reports, however, involve interpreters arriving through distinct discovery routes such as a direct path, registry entry, WindowsApps entry, or shim whose resolved spelling differs.
 
-## Semantic boundary
+## Executed Windows result
 
-Do **not** replace the lexical check with file-identity deduplication. The earlier discussion explicitly keeps distinct symlink, shim, and search-path entries visible because the path used to reach an interpreter is relevant information. The narrow requirement is:
+Read-only carrier run `31047448111`, job `92446355170`, used packet `bef3a851268867f6c85cab49aa998471cc7af873` on Windows Server 2022.
 
-- on Windows, collapse queried paths that are equal under Windows ordinal case-insensitive comparison;
-- on non-Windows platforms, preserve current exact path equality;
-- preserve genuinely distinct shim, symlink, and search-path entries;
-- avoid filesystem canonicalization and lossy UTF-8 conversion.
+The carrier:
 
-## Selected candidate
+- checked out the immutable baseline and candidate source;
+- applied the UTF-16 case-variant integration control and candidate transformer cleanly;
+- compiled the baseline successfully;
+- ran exactly one focused `python_list_duplicate_path_entries` test;
+- observed the baseline test **pass**, listing each Python once;
+- skipped the candidate stage because the required baseline failure was absent.
 
-The workspace already enables the `windows` crate's `Win32_Globalization` feature, and the exact pinned `windows` 0.61 API exposes `CompareStringOrdinal(&[u16], &[u16], true)` plus `CSTR_EQUAL`.
+Artifact `8948402487`, SHA-256 `a136314c4f7d4b21c7d29fdd105de187fb6faccedfd1d01815485964ea37aabc`, retains the baseline transcript.
 
-`apply_candidate.py` therefore prepares:
+This is not evidence that issue #13505 is fixed and not evidence for the candidate. It establishes that adding case-varied copies of the same directories to `UV_PYTHON_SEARCH_PATH` does not reproduce the report on the tested head. An earlier discovery layer already collapses or otherwise avoids those duplicates.
 
-1. `uv_windows::path_eq_ignore_case`, a lexical UTF-16 ordinal comparison wrapper;
-2. Windows-only seen-path tracking that scans the small set of previously listed queried paths with that helper;
-3. the existing hash-set behavior unchanged on non-Windows platforms;
-4. a direct Unicode/ASCII case control that also preserves a distinct shim path;
-5. an end-to-end extension of `python_list_duplicate_path_entries` that adds case-varied spellings of the same real interpreter directories.
+## Retained semantic boundary
 
-The candidate does not canonicalize, resolve, or compare file identity.
+Do **not** replace lexical comparison with file-identity deduplication. Distinct symlink, shim, registry, and search-path entries can be useful provenance. A repair should collapse only queried paths equal under Windows ordinal case-insensitive semantics while preserving genuinely distinct discovery entries.
 
-## Execution contract
+The selected design sketch still uses `CompareStringOrdinal` over UTF-16 through `uv-windows`, with unchanged non-Windows behavior. It remains **unexecuted** because its end-to-end baseline control is invalid.
 
-A read-only Windows carrier must prove:
+## Next discriminator
 
-- baseline plus the new integration control fails after compiling and running the focused test;
-- candidate direct ordinal-comparison control passes;
-- candidate integration control lists each interpreter once;
-- `cargo fmt --check` and `git diff --check` pass;
-- only the four expected source/test paths change locally;
-- no product source is published by the carrier.
+A renewed experiment must reproduce the public shape through two distinct discovery sources or isolate the final inclusion boundary directly.
 
-Only a green matrix permits materializing a clean owned-fork source branch. This packet is not an upstream contribution claim.
+Preferred controls:
+
+1. PATH plus registry or shim discovery of one interpreter with case-varied queried paths;
+2. a focused final-list unit that feeds two case-varied queried paths into the current inclusion logic and fails on the baseline;
+3. a negative control preserving two genuinely distinct shim/search-path locations.
+
+No new Windows carrier should run until one of those controls distinguishes the baseline. No product source has been materialized. This packet is not an upstream contribution claim.
