@@ -33,6 +33,10 @@ jobs:
           diff -u "$RUNNER_TEMP/expected-carrier-files.txt" "$RUNNER_TEMP/carrier-files.txt"
           cp scripts/fieldwork/refine-uv-lock-requirements-hint.py "$RUNNER_TEMP/refine.py"
 
+      - name: Install Rust components
+        shell: bash
+        run: rustup component add rustfmt clippy
+
       - name: Apply accepted source and global refinement
         shell: bash
         run: |
