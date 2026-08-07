@@ -2329,6 +2329,103 @@ pub struct ToolOptions {
     torch_backend: Option<TorchMode>,
 }
 
+impl ToolOptions {
+    /// Return whether the options persisted for an installed tool satisfy the options requested
+    /// for a tool invocation.
+    ///
+    /// Unspecified invocation options inherit the installed tool's settings. Explicit invocation
+    /// options must match the corresponding persisted value exactly.
+    pub fn satisfies(&self, requested: &Self) -> bool {
+        fn field_satisfies<T: PartialEq>(installed: Option<&T>, requested: Option<&T>) -> bool {
+            match requested {
+                None => true,
+                Some(requested) => installed == Some(requested),
+            }
+        }
+
+        let Self {
+            index,
+            index_url,
+            extra_index_url,
+            no_index,
+            find_links,
+            index_strategy,
+            keyring_provider,
+            resolution,
+            prerelease,
+            prerelease_package,
+            fork_strategy,
+            dependency_metadata,
+            config_settings,
+            config_settings_package,
+            build_isolation,
+            extra_build_dependencies,
+            extra_build_variables,
+            exclude_newer,
+            exclude_newer_package,
+            link_mode,
+            compile_bytecode,
+            no_sources,
+            no_sources_package,
+            no_build,
+            no_build_package,
+            no_binary,
+            no_binary_package,
+            torch_backend,
+        } = requested;
+
+        field_satisfies(self.index.as_ref(), index.as_ref())
+            && field_satisfies(self.index_url.as_ref(), index_url.as_ref())
+            && field_satisfies(self.extra_index_url.as_ref(), extra_index_url.as_ref())
+            && field_satisfies(self.no_index.as_ref(), no_index.as_ref())
+            && field_satisfies(self.find_links.as_ref(), find_links.as_ref())
+            && field_satisfies(self.index_strategy.as_ref(), index_strategy.as_ref())
+            && field_satisfies(self.keyring_provider.as_ref(), keyring_provider.as_ref())
+            && field_satisfies(self.resolution.as_ref(), resolution.as_ref())
+            && field_satisfies(self.prerelease.as_ref(), prerelease.as_ref())
+            && field_satisfies(
+                self.prerelease_package.as_ref(),
+                prerelease_package.as_ref(),
+            )
+            && field_satisfies(self.fork_strategy.as_ref(), fork_strategy.as_ref())
+            && field_satisfies(
+                self.dependency_metadata.as_ref(),
+                dependency_metadata.as_ref(),
+            )
+            && field_satisfies(self.config_settings.as_ref(), config_settings.as_ref())
+            && field_satisfies(
+                self.config_settings_package.as_ref(),
+                config_settings_package.as_ref(),
+            )
+            && field_satisfies(self.build_isolation.as_ref(), build_isolation.as_ref())
+            && field_satisfies(
+                self.extra_build_dependencies.as_ref(),
+                extra_build_dependencies.as_ref(),
+            )
+            && field_satisfies(
+                self.extra_build_variables.as_ref(),
+                extra_build_variables.as_ref(),
+            )
+            && field_satisfies(self.exclude_newer.as_ref(), exclude_newer.as_ref())
+            && field_satisfies(
+                self.exclude_newer_package.as_ref(),
+                exclude_newer_package.as_ref(),
+            )
+            && field_satisfies(self.link_mode.as_ref(), link_mode.as_ref())
+            && field_satisfies(self.compile_bytecode.as_ref(), compile_bytecode.as_ref())
+            && field_satisfies(self.no_sources.as_ref(), no_sources.as_ref())
+            && field_satisfies(
+                self.no_sources_package.as_ref(),
+                no_sources_package.as_ref(),
+            )
+            && field_satisfies(self.no_build.as_ref(), no_build.as_ref())
+            && field_satisfies(self.no_build_package.as_ref(), no_build_package.as_ref())
+            && field_satisfies(self.no_binary.as_ref(), no_binary.as_ref())
+            && field_satisfies(self.no_binary_package.as_ref(), no_binary_package.as_ref())
+            && field_satisfies(self.torch_backend.as_ref(), torch_backend.as_ref())
+    }
+}
+
 /// The on-disk representation of [`ToolOptions`] in a tool receipt.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]

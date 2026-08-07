@@ -3735,3 +3735,340 @@ async fn tool_run_latest_keyring_auth() {
     Installed 1 executable: app
     ");
 }
+
+#[test]
+fn tool_run_receipt_options_unspecified_should_reuse() {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+
+    context
+        .tool_install()
+        .arg("black==24.2.0")
+        .arg("--exclude-newer")
+        .arg("2024-03-01T00:00:00Z")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let output = context
+        .tool_run()
+        .arg("--from")
+        .arg("black==24.2.0")
+        .arg("black")
+        .arg("--version")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "tool run failed: {output:?}");
+    assert!(
+        output.stderr.is_empty(),
+        "expected installed tool reuse with unspecified run options, got stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn tool_run_receipt_options_same_explicit_reuses() {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+
+    context
+        .tool_install()
+        .arg("black==24.2.0")
+        .arg("--exclude-newer")
+        .arg("2024-03-01T00:00:00Z")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let output = context
+        .tool_run()
+        .arg("--exclude-newer")
+        .arg("2024-03-01T00:00:00Z")
+        .arg("--from")
+        .arg("black==24.2.0")
+        .arg("black")
+        .arg("--version")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "tool run failed: {output:?}");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn tool_run_receipt_options_conflicting_explicit_does_not_reuse() {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+
+    context
+        .tool_install()
+        .arg("black==24.2.0")
+        .arg("--exclude-newer")
+        .arg("2024-03-01T00:00:00Z")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let output = context
+        .tool_run()
+        .arg("--exclude-newer")
+        .arg("2024-03-25T00:00:00Z")
+        .arg("--from")
+        .arg("black==24.2.0")
+        .arg("black")
+        .arg("--version")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "tool run failed: {output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Resolved"));
+}
+
+#[test]
+fn tool_run_receipt_options_same_list_value_reuses() {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all().unwrap();
+
+    context
+        .tool_install()
+        .arg("black==24.2.0")
+        .arg("--exclude-newer")
+        .arg("2024-03-01T00:00:00Z")
+        .arg("--find-links")
+        .arg(links.as_os_str())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let output = context
+        .tool_run()
+        .arg("--exclude-newer")
+        .arg("2024-03-01T00:00:00Z")
+        .arg("--find-links")
+        .arg(links.as_os_str())
+        .arg("--from")
+        .arg("black==24.2.0")
+        .arg("black")
+        .arg("--version")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "tool run failed: {output:?}");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn tool_run_receipt_options_unspecified_fields_inherit() {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all().unwrap();
+
+    context
+        .tool_install()
+        .arg("black==24.2.0")
+        .arg("--exclude-newer")
+        .arg("2024-03-01T00:00:00Z")
+        .arg("--find-links")
+        .arg(links.as_os_str())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let output = context
+        .tool_run()
+        .arg("--exclude-newer")
+        .arg("2024-03-01T00:00:00Z")
+        .arg("--from")
+        .arg("black==24.2.0")
+        .arg("black")
+        .arg("--version")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "tool run failed: {output:?}");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn tool_run_receipt_options_isolated_still_bypasses() {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+
+    context
+        .tool_install()
+        .arg("black==24.2.0")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let output = context
+        .tool_run()
+        .arg("--isolated")
+        .arg("--from")
+        .arg("black==24.2.0")
+        .arg("black")
+        .arg("--version")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "tool run failed: {output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Resolved"));
+}
+
+#[test]
+fn tool_run_receipt_options_unspecified_torch_backend_inherits() {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+
+    context
+        .tool_install()
+        .arg("black==24.2.0")
+        .arg("--torch-backend")
+        .arg("cpu")
+        .env_remove(EnvVars::UV_TORCH_BACKEND)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let output = context
+        .tool_run()
+        .arg("--from")
+        .arg("black==24.2.0")
+        .arg("black")
+        .arg("--version")
+        .env_remove(EnvVars::UV_TORCH_BACKEND)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "tool run failed: {output:?}");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn tool_run_receipt_options_same_torch_backend_reuses() {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+
+    context
+        .tool_install()
+        .arg("black==24.2.0")
+        .arg("--torch-backend")
+        .arg("cpu")
+        .env_remove(EnvVars::UV_TORCH_BACKEND)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let output = context
+        .tool_run()
+        .arg("--torch-backend")
+        .arg("cpu")
+        .arg("--from")
+        .arg("black==24.2.0")
+        .arg("black")
+        .arg("--version")
+        .env_remove(EnvVars::UV_TORCH_BACKEND)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "tool run failed: {output:?}");
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("Resolved"),
+        "same explicit torch backend should reuse installed tool: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn tool_run_receipt_options_conflicting_torch_backend_does_not_reuse() {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+
+    context
+        .tool_install()
+        .arg("black==24.2.0")
+        .arg("--torch-backend")
+        .arg("cpu")
+        .env_remove(EnvVars::UV_TORCH_BACKEND)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let output = context
+        .tool_run()
+        .arg("--torch-backend")
+        .arg("cu126")
+        .arg("--from")
+        .arg("black==24.2.0")
+        .arg("black")
+        .arg("--version")
+        .env_remove(EnvVars::UV_TORCH_BACKEND)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "tool run failed: {output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Resolved"),
+        "conflicting explicit torch backend should bypass installed tool: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

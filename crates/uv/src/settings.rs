@@ -938,7 +938,7 @@ impl ToolRunSettings {
 
         let filesystem_options = filesystem.map(FilesystemOptions::into_options);
 
-        let options = resolver_installer_options_with_environment(
+        let mut options = resolver_installer_options_with_environment(
             resolver_installer_options(installer, build)?,
             &environment,
         )
@@ -949,14 +949,15 @@ impl ToolRunSettings {
                 .unwrap_or_default(),
         ));
 
+        if let Some(torch_backend) = torch_backend {
+            options.torch_backend = Some(torch_backend);
+        }
+
         let filesystem_install_mirrors = filesystem_options
             .map(|options| options.install_mirrors.clone())
             .unwrap_or_default();
 
-        let mut settings = ResolverInstallerSettings::from(options.clone());
-        if torch_backend.is_some() {
-            settings.resolver.torch_backend = torch_backend;
-        }
+        let settings = ResolverInstallerSettings::from(options.clone());
         let lfs = GitLfsSetting::new(lfs.then_some(true), environment.lfs);
 
         // Resolve flags from CLI and environment variables.
@@ -1063,7 +1064,7 @@ impl ToolInstallSettings {
 
         let filesystem_options = filesystem.map(FilesystemOptions::into_options);
 
-        let options = resolver_installer_options_with_environment(
+        let mut options = resolver_installer_options_with_environment(
             resolver_installer_options(installer, build)?,
             &environment,
         )
@@ -1074,14 +1075,15 @@ impl ToolInstallSettings {
                 .unwrap_or_default(),
         ));
 
+        if let Some(torch_backend) = torch_backend {
+            options.torch_backend = Some(torch_backend);
+        }
+
         let filesystem_install_mirrors = filesystem_options
             .map(|options| options.install_mirrors.clone())
             .unwrap_or_default();
 
-        let mut settings = ResolverInstallerSettings::from(options.clone());
-        if torch_backend.is_some() {
-            settings.resolver.torch_backend = torch_backend;
-        }
+        let settings = ResolverInstallerSettings::from(options.clone());
         let lfs = GitLfsSetting::new(lfs.then_some(true), environment.lfs);
 
         Ok(Self {
