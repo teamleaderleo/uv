@@ -87,6 +87,29 @@ fn tool_upgrade_empty() {
 }
 
 #[test]
+fn tool_upgrade_all_fails_on_invalid_tool_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+
+    tool_dir.create_dir_all()?;
+    tool_dir
+        .child("not a valid package name!")
+        .create_dir_all()?;
+
+    context
+        .tool_upgrade()
+        .arg("--all")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .failure();
+
+    Ok(())
+}
+
+#[test]
 fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
     let tool_dir = context.temp_dir.child("tools");
