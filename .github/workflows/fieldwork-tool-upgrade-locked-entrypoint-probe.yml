@@ -1,0 +1,60 @@
+name: Fieldwork Windows tool upgrade recovery probe
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/tool-upgrade-locked-entrypoint-probe-base
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      SOURCE_BASE: 544157b31dbc6007bfdfe2789d3d068278fdb57d
+    steps:
+      - name: Check out carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier boundary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git diff --name-only '${{ github.event.pull_request.base.sha }}...HEAD' | Sort-Object | Set-Content "$env:RUNNER_TEMP\carrier-files.txt"
+          'scripts/fieldwork/probe-tool-upgrade-locked-entrypoint.ps1' | Set-Content "$env:RUNNER_TEMP\expected-carrier-files.txt"
+          if (Compare-Object (Get-Content "$env:RUNNER_TEMP\expected-carrier-files.txt") (Get-Content "$env:RUNNER_TEMP\carrier-files.txt")) {
+            throw 'carrier boundary mismatch'
+          }
+          Copy-Item scripts/fieldwork/probe-tool-upgrade-locked-entrypoint.ps1 "$env:RUNNER_TEMP\probe.ps1"
+
+      - name: Build exact-source uv
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git checkout --detach $env:SOURCE_BASE
+          if (git status --porcelain) { throw 'source checkout is dirty before build' }
+          cargo build --locked --bin uv
+          git diff --exit-code
+
+      - name: Reproduce locked-entrypoint recovery defect
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "$env:RUNNER_TEMP\probe.ps1" -UvPath (Resolve-Path '.\target\debug\uv.exe') -Root "$env:RUNNER_TEMP\tool-upgrade-probe"
+
+      - name: Retain receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tool-upgrade-locked-entrypoint-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/carrier-files.txt
+            ${{ runner.temp }}/tool-upgrade-probe/probe-transcript.txt
+            ${{ runner.temp }}/tool-upgrade-probe/tools/ruff/uv-receipt.toml
+          if-no-files-found: warn
+          retention-days: 14
