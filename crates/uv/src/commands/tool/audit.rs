@@ -115,6 +115,7 @@ pub(crate) async fn audit(
     let groups = DependencyGroupsWithDefaults::none();
     let mut audits = Vec::new();
     let mut matched_ignores = FxHashSet::default();
+    let mut skipped_tools = false;
 
     for (name, tool) in tools {
         let tool = match tool {
@@ -126,6 +127,7 @@ pub(crate) async fn audit(
                 warn_user!(
                     "Ignoring malformed tool `{name}` (run `uv tool uninstall {name}` to remove)"
                 );
+                skipped_tools = true;
                 continue;
             }
         };
@@ -143,6 +145,7 @@ pub(crate) async fn audit(
                 warn_user!(
                     "Skipping tool `{name}` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it"
                 );
+                skipped_tools = true;
                 continue;
             }
             Err(error) => {
@@ -156,6 +159,7 @@ pub(crate) async fn audit(
                     "Skipping tool `{name}` because its lockfile at `{}` could not be read: {error}",
                     lock_path.user_display()
                 );
+                skipped_tools = true;
                 continue;
             }
         };
@@ -177,6 +181,7 @@ pub(crate) async fn audit(
                     "Skipping tool `{name}` because its lockfile at `{}` uses an unsupported schema version (v{version}, but only v{supported} is supported)",
                     lock_path.user_display()
                 );
+                skipped_tools = true;
                 continue;
             }
             Err(LockParseError::Toml(error)) => {
@@ -190,6 +195,7 @@ pub(crate) async fn audit(
                     "Skipping tool `{name}` because its lockfile at `{}` is invalid: {error}",
                     lock_path.user_display()
                 );
+                skipped_tools = true;
                 continue;
             }
         };
@@ -236,10 +242,19 @@ pub(crate) async fn audit(
 
     if audits.is_empty() && matches!(output_format, AuditOutputFormat::Text) {
         writeln!(printer.stderr(), "No auditable tools installed")?;
-        return Ok(ExitStatus::Success);
+        return Ok(if skipped_tools {
+            ExitStatus::Failure
+        } else {
+            ExitStatus::Success
+        });
     }
 
-    render_audits(&audits, output_format, printer)
+    let status = render_audits(&audits, output_format, printer)?;
+    Ok(if skipped_tools {
+        ExitStatus::Failure
+    } else {
+        status
+    })
 }
 
 fn render_audits(

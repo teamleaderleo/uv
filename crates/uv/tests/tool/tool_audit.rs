@@ -173,7 +173,7 @@ fn tool_audit_missing_lockfile() {
         .arg("--all")
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     warning: Skipping tool `simple-launcher` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it
     No auditable tools installed
@@ -203,7 +203,7 @@ fn tool_audit_invalid_receipt() -> Result<()> {
         .arg("--all")
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     warning: Ignoring malformed tool `simple-launcher` (run `uv tool uninstall simple-launcher` to remove)
     No auditable tools installed
@@ -235,7 +235,7 @@ fn tool_audit_invalid_lockfile() -> Result<()> {
         .arg("--all")
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     warning: Skipping tool `simple-launcher` because its lockfile at `tools/simple-launcher/uv.lock` is invalid: TOML parse error at line 1, column 5
       |
@@ -279,7 +279,7 @@ fn tool_audit_unsupported_lockfile_version() -> Result<()> {
         .arg("--all")
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     warning: Skipping tool `simple-launcher` because its lockfile at `tools/simple-launcher/uv.lock` uses an unsupported schema version (v2, but only v1 is supported)
     No auditable tools installed
@@ -410,7 +410,7 @@ async fn tool_audit_mixed_lockfiles() {
         .arg(server.uri())
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     warning: Skipping tool `basic-app` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it
     Auditing `simple-launcher`
@@ -597,6 +597,32 @@ async fn tool_audit_json() {
     "#);
 }
 
+#[test]
+fn tool_audit_json_no_auditable_tools_after_skip() {
+    let context = uv_test::test_context!("3.12");
+    let tool_dir = context.temp_dir.child("tools");
+    install_tool(&context, "simple-launcher", false);
+
+    uv_snapshot!(context.filters(), context.tool_audit()
+        .arg("--all")
+        .arg("--output-format")
+        .arg("json")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks,json-output")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @r#"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "tools": []
+    }
+
+    ----- stderr -----
+    warning: Skipping tool `simple-launcher` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it
+    "#);
+}
+
 #[tokio::test]
 async fn tool_audit_json_preview_warning() {
     let context = uv_test::test_context!("3.12");
@@ -765,7 +791,7 @@ fn tool_audit_sarif_no_auditable_tools() {
         .arg("sarif")
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @r#"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stdout -----
     {
       "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
