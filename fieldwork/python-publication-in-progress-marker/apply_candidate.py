@@ -87,6 +87,42 @@ replace(
 """,
     name="finalization marker removal",
 )
+replace(
+    managed,
+    """    #[test]
+    fn test_is_upgrade_of_same_version() {
+""",
+    """    #[test]
+    #[cfg(unix)]
+    fn find_all_skips_in_progress_installations() {
+        let installations = ManagedPythonInstallations::temp().unwrap().init().unwrap();
+        let platform = Platform::from_str("linux-x86_64-gnu").unwrap();
+        let key = PythonInstallationKey::new(
+            LenientImplementationName::Known(ImplementationName::CPython),
+            3,
+            12,
+            6,
+            None,
+            platform,
+            PythonVariant::Default,
+        );
+        let path = installations.root().join(key.to_string());
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER), b"in-progress").unwrap();
+
+        assert_eq!(installations.find_all().unwrap().count(), 0);
+
+        fs::remove_file(path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER)).unwrap();
+        let found = installations.find_all().unwrap().collect::<Vec<_>>();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].key(), &key);
+    }
+
+    #[test]
+    fn test_is_upgrade_of_same_version() {
+""",
+    name="marker discovery unit test",
+)
 
 downloads = root / "crates/uv-python/src/downloads.rs"
 replace(
