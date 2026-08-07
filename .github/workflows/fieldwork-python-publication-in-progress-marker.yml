@@ -87,6 +87,12 @@ jobs:
           grep -F "running 1 test" marker-failed-output.txt
           grep -F "test python_install::python_install_marker_hides_failed_publication_residue ... ok" marker-failed-output.txt
 
+          cargo test --locked -p uv --test python --features test-python-managed \
+            python_install::python_reinstall_marker_hides_replaced_incomplete_installation -- --exact --nocapture \
+            2>&1 | tee marker-reinstall-output.txt
+          grep -F "running 1 test" marker-reinstall-output.txt
+          grep -F "test python_install::python_reinstall_marker_hides_replaced_incomplete_installation ... ok" marker-reinstall-output.txt
+
       - name: Publish exact clean source branch
         env:
           GH_TOKEN: ${{ github.token }}
@@ -125,5 +131,6 @@ jobs:
             uv-clean/marker-unit-output.txt
             uv-current/marker-paused-output.txt
             uv-current/marker-failed-output.txt
+            uv-current/marker-reinstall-output.txt
           if-no-files-found: warn
           retention-days: 30
