@@ -50,14 +50,20 @@ jobs:
       - name: Execute residue characterization test
         working-directory: uv-current
         run: |
+          set -o pipefail
           cargo test --locked -p uv --test tool \
-            tool_uninstall_all_missing_receipt_leaves_entrypoint_residue -- --exact --nocapture
+            tool_uninstall::tool_uninstall_all_missing_receipt_leaves_entrypoint_residue \
+            -- --exact --nocapture 2>&1 | tee residue-test-output.txt
+          grep -F "running 1 test" residue-test-output.txt
+          grep -F "test tool_uninstall::tool_uninstall_all_missing_receipt_leaves_entrypoint_residue ... ok" residue-test-output.txt
 
       - name: Upload exact probe patch
         if: always()
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
           name: fieldwork-tool-uninstall-entrypoint-residue
-          path: tool-uninstall-entrypoint-residue.patch
+          path: |
+            tool-uninstall-entrypoint-residue.patch
+            uv-current/residue-test-output.txt
           if-no-files-found: warn
           retention-days: 30
