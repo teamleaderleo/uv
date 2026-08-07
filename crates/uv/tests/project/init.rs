@@ -472,6 +472,96 @@ fn init_package() -> Result<()> {
     Ok(())
 }
 
+/// Test that stub-only packages use the PEP 561 layout with uv_build.
+#[test]
+fn init_package_stubs_uv_backend() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let child = context.temp_dir.child("foo-stubs");
+    child.create_dir_all()?;
+
+    context
+        .init()
+        .current_dir(&child)
+        .arg("--package")
+        .assert()
+        .success();
+
+    child
+        .child("src/foo-stubs/__init__.pyi")
+        .assert(predicate::path::is_file());
+    child
+        .child("src/foo_stubs/__init__.py")
+        .assert(predicate::path::missing());
+
+    let pyproject = fs_err::read_to_string(child.join("pyproject.toml"))?;
+    assert!(!pyproject.contains("[project.scripts]"));
+    assert!(pyproject.contains("build-backend = \"uv_build\""));
+
+    context.build().current_dir(&child).assert().success();
+
+    Ok(())
+}
+
+/// Test that third-party backends retain their existing package layout and script contract.
+#[test]
+fn init_package_stubs_hatch_backend() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let child = context.temp_dir.child("foo-stubs");
+    child.create_dir_all()?;
+
+    context
+        .init()
+        .current_dir(&child)
+        .arg("--package")
+        .arg("--build-backend")
+        .arg("hatch")
+        .assert()
+        .success();
+
+    child
+        .child("src/foo_stubs/__init__.py")
+        .assert(predicate::path::is_file());
+    child
+        .child("src/foo-stubs/__init__.pyi")
+        .assert(predicate::path::missing());
+
+    let pyproject = fs_err::read_to_string(child.join("pyproject.toml"))?;
+    assert!(pyproject.contains("[project.scripts]"));
+    assert!(pyproject.contains("build-backend = \"hatchling.build\""));
+
+    Ok(())
+}
+
+/// Test that third-party libraries remain script-free and use their normal module layout.
+#[test]
+fn init_library_stubs_hatch_backend() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let child = context.temp_dir.child("foo-stubs");
+    child.create_dir_all()?;
+
+    context
+        .init()
+        .current_dir(&child)
+        .arg("--lib")
+        .arg("--build-backend")
+        .arg("hatch")
+        .assert()
+        .success();
+
+    child
+        .child("src/foo_stubs/__init__.py")
+        .assert(predicate::path::is_file());
+    child
+        .child("src/foo-stubs/__init__.pyi")
+        .assert(predicate::path::missing());
+
+    let pyproject = fs_err::read_to_string(child.join("pyproject.toml"))?;
+    assert!(!pyproject.contains("[project.scripts]"));
+    assert!(pyproject.contains("build-backend = \"hatchling.build\""));
+
+    Ok(())
+}
+
 #[test]
 fn init_bare_lib() {
     let context = uv_test::test_context!("3.12");
