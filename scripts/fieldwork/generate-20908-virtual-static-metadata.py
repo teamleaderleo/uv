@@ -125,7 +125,6 @@ new_match = '''            StaticMetadata::Unavailable { error, dynamic } => {
 if section.count(old_match) != 1:
     raise SystemExit(f"unexpected source-tree metadata match count: {section.count(old_match)}")
 section = section.replace(old_match, new_match)
-text = text[:start] + section + text[end:]
 
 pattern = re.compile(
     r'(?P<indent>[ \t]+)StaticMetadata::Dynamic => true,\n(?P=indent)StaticMetadata::None => false,'
@@ -139,8 +138,14 @@ def add_unavailable(match: re.Match[str]) -> str:
         f"{indent}StaticMetadata::None => false,"
     )
 
-text, count = pattern.subn(add_unavailable, text)
+# Do not run the generic rewrite through `source_tree_metadata`: that function needs the special
+# virtual-project behavior above. The remaining four match sites are ordinary package/archive/Git
+# paths and keep their existing fallback semantics.
+prefix, prefix_count = pattern.subn(add_unavailable, text[:start])
+suffix, suffix_count = pattern.subn(add_unavailable, text[end:])
+count = prefix_count + suffix_count
 if count != 4:
     raise SystemExit(f"expected four ordinary StaticMetadata match sites, found {count}")
+text = prefix + section + suffix
 
 path.write_text(text)
