@@ -95,11 +95,19 @@ jobs:
           rustup component add rustfmt
           cargo fmt --all --check
           cargo check -p uv
-          cargo test --package uv --test it init::init_package_stubs_uv_backend -- --exact
-          cargo test --package uv --test it init::init_package_stubs_hatch_backend -- --exact
-          cargo test --package uv --test it init::init_library_stubs_hatch_backend -- --exact
-          cargo test --package uv --test it init::init_package -- --exact
-          cargo test --package uv --test it init::init_library -- --exact
+
+          cargo test --package uv --test it -- --list >../artifacts/product/native-tests.txt
+          for test_name in \
+            init_package_stubs_uv_backend \
+            init_package_stubs_hatch_backend \
+            init_library_stubs_hatch_backend \
+            init_package \
+            init_library
+          do
+            test "$(grep -Ec "(^|::)${test_name}: test$" ../artifacts/product/native-tests.txt)" -eq 1
+            cargo test --package uv --test it "$test_name"
+          done
+
           cargo build --bin uv
 
       - name: Run 16-case backend build matrix
