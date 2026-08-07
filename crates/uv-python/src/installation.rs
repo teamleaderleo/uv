@@ -371,6 +371,7 @@ impl PythonInstallation {
         if let Err(e) = installed.ensure_dylib_patched() {
             e.warn_user(&installed);
         }
+        installed.mark_finalized()?;
 
         Ok(Self {
             source: PythonSource::Managed,

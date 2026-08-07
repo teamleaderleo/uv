@@ -680,6 +680,7 @@ async fn perform_install(
         if let Err(e) = installation.ensure_dylib_patched() {
             e.warn_user(installation);
         }
+        installation.mark_finalized()?;
 
         let upgradeable = (default || is_default_install)
             || requested_minor_versions.contains(&installation.key().version().python_version());
