@@ -1,0 +1,83 @@
+name: Fieldwork 20908 virtual static metadata
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/20908-virtual-static-metadata-base
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_BASE: 507230998c9541d67814b57463ac00e454ff6991
+    steps:
+      - name: Check out carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_ref="origin/${{ github.event.pull_request.base.ref }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          git diff --name-only "$base_ref...$head_sha" | sort > "$RUNNER_TEMP/carrier-files.txt"
+          printf '%s\n' \
+            scripts/fieldwork/generate-20908-virtual-static-metadata.py \
+            scripts/fieldwork/validate-20908-virtual-static-metadata.sh \
+            | sort > "$RUNNER_TEMP/expected-carrier-files.txt"
+          diff -u "$RUNNER_TEMP/expected-carrier-files.txt" "$RUNNER_TEMP/carrier-files.txt"
+          cp scripts/fieldwork/generate-20908-virtual-static-metadata.py "$RUNNER_TEMP/generate.py"
+          cp scripts/fieldwork/validate-20908-virtual-static-metadata.sh "$RUNNER_TEMP/validate.sh"
+
+      - name: Generate exact-source experiment
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$SOURCE_BASE"
+          python "$RUNNER_TEMP/generate.py"
+          rustup component add rustfmt clippy
+          cargo fmt --all
+          git diff --name-only | sort > "$RUNNER_TEMP/source-files.txt"
+          printf '%s\n' crates/uv-distribution/src/source/mod.rs > "$RUNNER_TEMP/expected-source-files.txt"
+          diff -u "$RUNNER_TEMP/expected-source-files.txt" "$RUNNER_TEMP/source-files.txt"
+          git diff --check
+          cargo fmt --all --check
+          git diff > "$RUNNER_TEMP/source.patch"
+
+      - name: Compile and lint affected source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check --locked -p uv-distribution -p uv
+          cargo clippy --locked -p uv-distribution --lib -- -D warnings
+          cargo clippy --locked -p uv --lib -- -D warnings
+
+      - name: Build exact-source uv
+        shell: bash
+        run: cargo build --locked -p uv
+
+      - name: Validate virtual-project behavior boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "$RUNNER_TEMP/validate.sh" "$(realpath target/debug/uv)" "$RUNNER_TEMP/20908"
+
+      - name: Retain receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: 20908-virtual-static-metadata-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/carrier-files.txt
+            ${{ runner.temp }}/source-files.txt
+            ${{ runner.temp }}/source.patch
+            ${{ runner.temp }}/20908/validation.txt
+          if-no-files-found: warn
+          retention-days: 14
