@@ -2,6 +2,8 @@ name: Fieldwork wheel cache generation lock current main
 
 on:
   pull_request:
+    branches:
+      - fieldwork/wheel-cache-generation-lock-544157-base
     paths:
       - 'fieldwork/wheel-cache-generation-lock/**'
       - '.github/workflows/fieldwork-wheel-cache-generation-lock-544157.yml'
