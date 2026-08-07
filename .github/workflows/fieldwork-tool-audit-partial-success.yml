@@ -52,12 +52,12 @@ jobs:
       - name: Run focused audit completeness tests
         working-directory: uv-current
         run: |
+          cargo test --locked -p uv --test tool tool_audit_missing_lockfile -- --exact
+          cargo test --locked -p uv --test tool tool_audit_invalid_receipt -- --exact
+          cargo test --locked -p uv --test tool tool_audit_invalid_lockfile -- --exact
+          cargo test --locked -p uv --test tool tool_audit_unsupported_lockfile_version -- --exact
           cargo test --locked -p uv --test tool \
-            tool_audit_missing_lockfile \
-            tool_audit_invalid_receipt \
-            tool_audit_invalid_lockfile \
-            tool_audit_unsupported_lockfile_version \
-            tool_audit_all_reports_partial_coverage_as_failure
+            tool_audit_all_reports_partial_coverage_as_failure -- --exact
 
       - name: Upload exact candidate patch
         if: always()
