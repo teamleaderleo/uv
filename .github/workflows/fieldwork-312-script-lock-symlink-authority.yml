@@ -1,0 +1,68 @@
+name: Fieldwork PEP 723 symlink lock authority
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/fieldwork-312-script-lock-symlink-authority.yml
+      - scripts/fieldwork/script-lock-symlink-authority.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-312-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  characterize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact pull-request head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact test-only carrier
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CHANGED: ${{ runner.temp }}/changed-files.txt
+          EXPECTED: ${{ runner.temp }}/expected-files.txt
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          /bin/sh -n scripts/fieldwork/script-lock-symlink-authority.sh
+          git diff --name-only "$BASE_SHA"...HEAD | sort > "$CHANGED"
+          cat > "$EXPECTED" <<'EOF'
+          .github/workflows/fieldwork-312-script-lock-symlink-authority.yml
+          scripts/fieldwork/script-lock-symlink-authority.sh
+          EOF
+          diff -u "$EXPECTED" "$CHANGED"
+          test -z "$(git status --porcelain)"
+          printf 'tested_sha=%s\n' "$EXPECTED_SHA"
+
+      - name: Build current uv
+        run: cargo build -p uv
+
+      - name: Execute no-network lock authority matrix
+        env:
+          RESULT: ${{ runner.temp }}/fieldwork-312-results.txt
+        run: |
+          set -euo pipefail
+          /bin/sh scripts/fieldwork/script-lock-symlink-authority.sh \
+            target/debug/uv | tee "$RESULT"
+          grep -F 'FIELDWORK_312=invocation-path-authority' "$RESULT"
+
+      - name: Retain exact matrix
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fieldwork-312-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/changed-files.txt
+            ${{ runner.temp }}/fieldwork-312-results.txt
+          if-no-files-found: warn
+          retention-days: 14
