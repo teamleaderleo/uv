@@ -104,7 +104,7 @@ if text.count(old_source_tree) != 1:
 text = text.replace(old_source_tree, new_source_tree)
 
 start = text.index("    async fn source_tree_metadata(")
-end = text.index("    /// Build the source distribution's metadata from a Git source tree", start)
+end = text.index("    /// Build a source distribution from a Git repository.", start)
 section = text[start:end]
 old_match = '''            StaticMetadata::Dynamic => true,
             StaticMetadata::None => false,
