@@ -24,7 +24,8 @@ jobs:
       - name: Verify carrier boundary
         shell: pwsh
         run: |
-          $files = @(git diff --name-only '${{ github.event.pull_request.base.sha }}'...HEAD | Sort-Object)
+          $base = '${{ github.event.pull_request.base.sha }}'
+          $files = @(git diff --name-only "$base...HEAD" | Sort-Object)
           $expected = @(
             'scripts/fieldwork/generate-tool-upgrade-entrypoint-recovery.py',
             'scripts/fieldwork/validate-tool-upgrade-entrypoint-recovery.ps1'
