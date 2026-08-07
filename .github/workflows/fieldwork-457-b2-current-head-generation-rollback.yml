@@ -164,7 +164,7 @@ jobs:
             Set-Content receipt/proposed-source.diff
           Copy-Item crates/uv/src/commands/self_update.rs receipt/generated-self-update.rs
 
-      - name: Run hostile rollback matrix
+      - name: Run hostile rollback and ownership matrix
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -172,6 +172,12 @@ jobs:
           cargo test -p uv --lib --features self-update fieldwork_current_head_generation_rollback -- --nocapture 2>&1 |
             Tee-Object -FilePath receipt/test.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path receipt/test.log -SimpleMatch 'generation_rollback_excludes_case_varied_current_executable ... ok')) {
+            throw 'case-varied current executable control did not execute successfully'
+          }
+          if (-not (Select-String -Path receipt/test.log -SimpleMatch 'generation_rollback_serializes_live_update_window ... ok')) {
+            throw 'live update serialization control did not execute successfully'
+          }
 
       - name: Check affected Windows targets
         shell: pwsh
@@ -190,15 +196,18 @@ jobs:
             experimentHead = $env:INPUT_HEAD
             candidateHead = $env:CANDIDATE_HEAD
             platform = 'windows-latest'
-            proposedGuarantee = 'a returned ordinary mutation error restores the pre-update managed generation'
+            proposedGuarantee = 'one updater owns the live mutation window and a returned ordinary mutation error restores the pre-update managed generation'
             controls = @(
               'destructive finalizer error restores uv, companions, and receipt'
               'mid-companion-copy error restores prior companion state'
               'success commits uv, companions, and receipt'
+              'case-varied current executable is excluded by live path identity'
+              'second updater cannot enter the live mutation window before lock release'
             )
             excludedGuarantees = @(
               'power loss or process termination during rollback'
-              'atomic multi-file visibility to concurrent observers'
+              'atomic multi-file visibility to read-only concurrent observers'
+              'full filesystem metadata restoration (ACLs, ADS, timestamps)'
               'custom or GHE axoupdater route'
             )
           } | ConvertTo-Json -Depth 4 | Set-Content receipt/contract.json
