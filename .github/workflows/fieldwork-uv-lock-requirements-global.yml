@@ -17,7 +17,7 @@ jobs:
       UV_BASE: b358fb6fce199fb1977913d310ddb6d573e44031
       SOURCE_BASE: 49e2fc5c821bb69a528308a036b17446bb5ab5a6
       SOURCE_COMMIT: 51c9fe109f037d084fd17647dc78a6451c2938f2
-      SOURCE_BRANCH: candidate/uv-lock-requirements-hint-current-v4
+      SOURCE_BRANCH: candidate/uv-lock-requirements-hint-current-v5
     steps:
       - name: Check out carrier
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -56,6 +56,7 @@ jobs:
           crates/uv-requirements/Cargo.toml
           crates/uv-requirements/src/specification.rs
           crates/uv/src/commands/diagnostics.rs
+          crates/uv/src/commands/pip/operations.rs
           crates/uv/tests/pip_install/main.rs
           crates/uv/tests/pip_install/uv_lock_requirements_hint.rs
           crates/uv/tests/tool/tool_run.rs
@@ -73,9 +74,14 @@ jobs:
           cargo test --locked -p uv --test pip_install --features test-python,test-pypi \
             uv_lock_requirements_hint -- --nocapture \
             | tee "$RUNNER_TEMP/pip-focused-tests.txt"
+          grep -F "running 8 tests" "$RUNNER_TEMP/pip-focused-tests.txt"
+          grep -F "test result: ok. 8 passed; 0 failed" "$RUNNER_TEMP/pip-focused-tests.txt"
+
           cargo test --locked -p uv --test tool --features test-python,test-pypi \
             tool_run_with_requirements_has_dedicated_hint -- --nocapture \
             | tee "$RUNNER_TEMP/tool-focused-test.txt"
+          grep -F "running 1 test" "$RUNNER_TEMP/tool-focused-test.txt"
+          grep -F "test tool_run::tool_run_with_requirements_has_dedicated_hint ... ok" "$RUNNER_TEMP/tool-focused-test.txt"
 
       - name: Run affected Clippy gates
         shell: bash
@@ -98,6 +104,7 @@ jobs:
             crates/uv-requirements/Cargo.toml \
             crates/uv-requirements/src/specification.rs \
             crates/uv/src/commands/diagnostics.rs \
+            crates/uv/src/commands/pip/operations.rs \
             crates/uv/tests/pip_install/main.rs \
             crates/uv/tests/pip_install/uv_lock_requirements_hint.rs \
             crates/uv/tests/tool/tool_run.rs
