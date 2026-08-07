@@ -8,7 +8,7 @@ External contact: **not authorized and not performed**
 
 ## Current classification
 
-`SOURCE/HISTORY MAPPED — PATH-ONLY REPRODUCER REJECTED — PATH+REGISTRY DISCRIMINATOR SELECTED — CANDIDATE UNEXECUTED`
+`SOURCE/HISTORY MAPPED — PATH-ONLY REPRODUCER REJECTED — PATH+REGISTRY FIXTURE PREPARED — CANDIDATE UNEXECUTED`
 
 The historical fix intentionally changed `uv python list` to display the queried executable path (`Interpreter::real_executable`) rather than Python's resolved `sys.executable`. That preserves useful information about shims and search-path entries.
 
@@ -33,8 +33,6 @@ This is not evidence that issue #13505 is fixed and not evidence for the candida
 
 ## Why the PATH-only control passes
 
-Source review now identifies the early dedup layer precisely.
-
 `python_executables_from_search_path()` splits the configured search path into directories, opens each directory with `same_file::Handle`, and skips directory identities already seen. This is file-identity dedup before any interpreter query. Therefore adding the same directory again with only a different Windows spelling is intentionally collapsed before `python list` ever receives two installations.
 
 That behavior does **not** generalize across discovery sources.
@@ -50,45 +48,50 @@ Each `Interpreter::query(executable, ...)` stores the supplied executable path d
 
 Finally, `uv python list` inserts those `real_executable` paths into `FxHashSet<PathBuf>`. That is the first cross-source dedup at the listing boundary, and it is case-sensitive.
 
-This source chain makes PATH + PEP 514 registry discovery the preferred next reproducer.
+## Prepared PATH + registry discriminator
 
-## Preferred next discriminator
+`fieldwork/13505/apply_registry_candidate.py` is now the authoritative next execution packet.
 
-Use the repository's existing opt-in Windows-registry test model. The `uv` crate already defines `test-windows-registry` specifically for tests that mutate global registry state, and Windows CI enables that feature.
+Baseline mode (`--tests-only`) injects one opt-in Windows integration test into `python_list.rs`. Candidate mode injects the same test and applies only the retained ordinal-comparison source candidate from `apply_candidate.py`; it deliberately does **not** re-add the rejected duplicated-PATH control.
 
-A focused Windows control should:
+The fixture:
 
-1. create a one-version test context, preferably CPython 3.12;
-2. identify the exact executable spelling produced through `UV_PYTHON_SEARCH_PATH`;
-3. create a temporary HKCU PEP 514 company/tag under `Software\\Python` with:
-   - `SysVersion = 3.12`;
-   - `InstallPath\\ExecutablePath` equal to the **same executable** but with a UTF-16 ASCII case toggle in an ordinary path component;
-4. prove the case-varied path exists and differs byte/code-unit-wise from the PATH spelling;
-5. run `uv python list 3.12 --only-installed` with registry discovery enabled and the controlled search path;
-6. require the baseline to expose both case spellings of the same queried executable, or otherwise record why one source was filtered before the final list;
-7. require the candidate to emit only one of those case-equivalent paths;
-8. remove the temporary HKCU company key in cleanup even on assertion failure where practical;
-9. keep a negative control showing genuinely distinct shim/search-path locations are not collapsed merely because they resolve to the same Python installation.
+1. creates a one-version CPython 3.12 test context;
+2. finds a real executable in the controlled `UV_PYTHON_SEARCH_PATH` using names that normal 3.12 discovery already searches;
+3. produces a second spelling by toggling one ASCII UTF-16 code unit after the drive prefix;
+4. requires that the case-varied spelling still resolves to the same test executable;
+5. creates a unique per-process HKCU PEP 514 company/tag under `Software\\Python`;
+6. writes `SysVersion = 3.12` and `InstallPath\\ExecutablePath` equal to the case-varied spelling;
+7. runs `uv python list 3.12 --only-installed` with registry discovery explicitly enabled;
+8. counts final output rows containing the deliberately selected executable path under ASCII case folding and requires exactly one;
+9. explicitly deletes the temporary HKCU company **before** the product assertion, so panic-abort test profiles do not strand test state on an assertion failure;
+10. retains a Drop cleanup guard for ordinary early `Result` returns.
 
-The registry key must be uniquely named per test process to avoid collisions with other opt-in registry tests. No HKLM mutation is needed.
+The test is gated by Windows plus the repository's existing `test-windows-registry` feature. The whole `python_list` module is already gated by `test-python`, and Windows CI enables both features.
 
-If the PATH + registry baseline still does not duplicate, the transcript must identify which source disappeared. Only then should the investigation fall back to a test seam immediately before final inclusion.
+Expected discriminator:
+
+- baseline should fail with two case-equivalent final rows if PATH and registry both reach the listing boundary;
+- candidate should pass with one row;
+- if baseline does not produce two rows, the captured stdout/stderr and source chain must identify which discovery source was filtered instead of treating the run as candidate evidence.
+
+The fixture does not assert which spelling survives, only that one case-equivalent queried path remains. Host-installed registry Pythons do not affect that count because the assertion is scoped to the controlled executable path.
 
 ## Retained semantic boundary
 
 Do **not** replace lexical comparison with file-identity deduplication. Distinct symlink, shim, registry, and search-path entries can be meaningful provenance. A repair should collapse only queried paths equal under Windows ordinal case-insensitive semantics while preserving genuinely distinct discovery entries.
 
-The retained design sketch uses `CompareStringOrdinal` over UTF-16 through `uv-windows`, with unchanged non-Windows behavior. It remains **unexecuted** because the earlier end-to-end baseline control was invalid.
+The retained design sketch uses `CompareStringOrdinal` over UTF-16 through `uv-windows`, with unchanged non-Windows behavior. Its direct control also preserves a genuinely distinct shim path. It remains **unexecuted** against the new cross-source baseline.
 
 ## Execution gate
 
-No new Windows carrier should run until the PATH + registry fixture exists in source form and static review confirms:
+Before a new read-only Windows carrier is authoritative, static review must still confirm:
 
-- registry cleanup ownership;
-- no dependence on host-installed registry Pythons for the asserted result;
-- exact baseline/candidate discriminator;
-- a provenance-preserving negative control;
-- source/test diff fence;
-- no source publication by the carrier.
+- the registry fixture compiles on the exact immutable base;
+- the selected search-path executable is guaranteed to participate in 3.12 discovery on the test runner;
+- explicit cleanup succeeds before any expected baseline assertion failure;
+- the candidate's four-file product/test fence remains exact;
+- the direct distinct-shim negative control runs with the candidate;
+- no product source is published by the carrier.
 
 No product source has been materialized. This packet is not an upstream contribution claim.
