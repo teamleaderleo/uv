@@ -24,13 +24,21 @@ jobs:
       - name: Verify carrier boundary
         shell: pwsh
         run: |
-          $base = '${{ github.event.pull_request.base.sha }}'
-          $files = @(git diff --name-only "$base...HEAD" | Sort-Object)
+          $baseRef = 'origin/${{ github.event.pull_request.base.ref }}'
+          $headSha = '${{ github.event.pull_request.head.sha }}'
+          $files = @(git diff --name-only "$baseRef...$headSha" | Sort-Object)
           $expected = @(
             'scripts/fieldwork/generate-tool-upgrade-entrypoint-recovery.py',
             'scripts/fieldwork/validate-tool-upgrade-entrypoint-recovery.ps1'
           ) | Sort-Object
-          if (Compare-Object $expected $files) { throw 'unexpected carrier files' }
+          $comparison = @(Compare-Object $expected $files)
+          if ($comparison.Count -ne 0) {
+            Write-Host 'expected carrier files:'
+            $expected | ForEach-Object { Write-Host "  $_" }
+            Write-Host 'actual carrier files:'
+            $files | ForEach-Object { Write-Host "  $_" }
+            throw 'unexpected carrier files'
+          }
           Copy-Item scripts/fieldwork/generate-tool-upgrade-entrypoint-recovery.py $env:RUNNER_TEMP/generate.py
           Copy-Item scripts/fieldwork/validate-tool-upgrade-entrypoint-recovery.ps1 $env:RUNNER_TEMP/validate.ps1
 
@@ -43,7 +51,12 @@ jobs:
           cargo fmt --all
           $files = @(git diff --name-only | Sort-Object)
           $expected = @('crates/uv/src/commands/tool/upgrade.rs')
-          if (Compare-Object $expected $files) { throw 'unexpected generated source files' }
+          $comparison = @(Compare-Object $expected $files)
+          if ($comparison.Count -ne 0) {
+            Write-Host 'actual generated source files:'
+            $files | ForEach-Object { Write-Host "  $_" }
+            throw 'unexpected generated source files'
+          }
           git diff --check
           cargo fmt --all --check
           git diff | Out-File -Encoding utf8 $env:RUNNER_TEMP/source.patch
