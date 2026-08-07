@@ -8,7 +8,7 @@ $ProgressPreference = 'SilentlyContinue'
 Remove-Item -Recurse -Force $Root -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $Root | Out-Null
 $Transcript = Join-Path $Root 'recovery-transcript.txt'
-: > $Transcript
+[System.IO.File]::WriteAllText($Transcript, '')
 
 function Record([string]$Text) {
     $Text | Tee-Object -FilePath $Transcript -Append | Write-Host
