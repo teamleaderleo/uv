@@ -36,6 +36,7 @@ jobs:
           set -euo pipefail
           git checkout --detach "$SOURCE_BASE"
           python "$RUNNER_TEMP/generate.py"
+          rustup component add rustfmt
           cargo fmt --all
           git diff --name-only | sort > "$RUNNER_TEMP/source-files.txt"
           printf '%s\n' crates/uv/tests/tool/tool_run.rs > "$RUNNER_TEMP/expected-source-files.txt"
