@@ -1,0 +1,270 @@
+name: Fieldwork 457 B2 current-head generation rollback
+
+on:
+  pull_request:
+    paths:
+      - .github/fieldwork/457-b2/inject_generation_rollback.py
+      - .github/fieldwork/457-b2/polish_generation_rollback.py
+      - .github/workflows/fieldwork-457-b2-current-head-generation-rollback.yml
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: fieldwork-457-b2-generation-rollback-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CANDIDATE_HEAD: 8d9324af47e1b52ec1f57f9232bd408281282cf5
+  INPUT_HEAD: ${{ github.event.pull_request.head.sha }}
+  CI: 1
+
+jobs:
+  source-audit:
+    name: Audit deterministic generation and exact diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact experiment
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify experiment fence and preserve generators
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$INPUT_HEAD"
+          test "$(git merge-base HEAD "$CANDIDATE_HEAD")" = "$CANDIDATE_HEAD"
+          expected=$(printf '%s\n' \
+            .github/fieldwork/457-b2/inject_generation_rollback.py \
+            .github/fieldwork/457-b2/polish_generation_rollback.py \
+            .github/workflows/fieldwork-457-b2-current-head-generation-rollback.yml | sort)
+          actual=$(git diff --name-only "$CANDIDATE_HEAD..HEAD" | sort)
+          test "$actual" = "$expected"
+          git diff --check "$CANDIDATE_HEAD..HEAD"
+          python -m py_compile \
+            .github/fieldwork/457-b2/inject_generation_rollback.py \
+            .github/fieldwork/457-b2/polish_generation_rollback.py
+          cp .github/fieldwork/457-b2/inject_generation_rollback.py \
+            "$RUNNER_TEMP/inject_generation_rollback.py"
+          cp .github/fieldwork/457-b2/polish_generation_rollback.py \
+            "$RUNNER_TEMP/polish_generation_rollback.py"
+
+      - name: Generate and inspect product source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$CANDIDATE_HEAD"
+          mkdir -p receipt-source
+          python "$RUNNER_TEMP/inject_generation_rollback.py"
+          python "$RUNNER_TEMP/polish_generation_rollback.py"
+          git diff --check
+          test "$(git diff --name-only "$CANDIDATE_HEAD")" = \
+            'crates/uv/src/commands/self_update.rs'
+          git diff -- crates/uv/src/commands/self_update.rs \
+            > receipt-source/unformatted-proposed-source.diff
+          cp crates/uv/src/commands/self_update.rs \
+            receipt-source/unformatted-generated-self-update.rs
+          {
+            echo "experiment_head=$INPUT_HEAD"
+            echo "candidate_head=$CANDIDATE_HEAD"
+            echo "authority=deterministic-transform-and-exact-diff-only"
+            echo "format_compile_test_authority=windows-generation-rollback-job"
+          } > receipt-source/identity.txt
+
+      - name: Upload source audit
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: fieldwork-457-b2-generation-rollback-source
+          path: receipt-source/
+          if-no-files-found: error
+          retention-days: 30
+
+  generation-rollback:
+    name: Windows ordinary-error generation rollback
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out exact experiment
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact base and preserve generators
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((git rev-parse HEAD) -ne $env:INPUT_HEAD) {
+            throw 'Checkout does not match immutable pull-request head'
+          }
+          if ((git merge-base HEAD $env:CANDIDATE_HEAD) -ne $env:CANDIDATE_HEAD) {
+            throw 'Experiment does not descend from exact public candidate'
+          }
+          $expected = @(
+            '.github/fieldwork/457-b2/inject_generation_rollback.py'
+            '.github/fieldwork/457-b2/polish_generation_rollback.py'
+            '.github/workflows/fieldwork-457-b2-current-head-generation-rollback.yml'
+          ) | Sort-Object
+          $changed = @(git diff --name-only "$env:CANDIDATE_HEAD..HEAD") | Sort-Object
+          if (Compare-Object $expected $changed) {
+            throw "Unexpected experiment diff. Expected: $($expected -join ', '); actual: $($changed -join ', ')"
+          }
+          git diff --check "$env:CANDIDATE_HEAD..HEAD"
+          Copy-Item .github/fieldwork/457-b2/inject_generation_rollback.py `
+            (Join-Path $env:RUNNER_TEMP 'inject_generation_rollback.py')
+          Copy-Item .github/fieldwork/457-b2/polish_generation_rollback.py `
+            (Join-Path $env:RUNNER_TEMP 'polish_generation_rollback.py')
+          git checkout --detach $env:CANDIDATE_HEAD
+          New-Item -ItemType Directory -Force -Path receipt | Out-Null
+          @(
+            "experiment_head=$env:INPUT_HEAD"
+            "candidate_head=$env:CANDIDATE_HEAD"
+            "runner=$env:RUNNER_OS"
+          ) | Set-Content receipt/identity.txt
+          rustc --version | Tee-Object -FilePath receipt/rust-version.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo --version | Tee-Object -FilePath receipt/cargo-version.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          shared-key: fieldwork-457-b2-current-head-generation-rollback
+          cache-on-failure: true
+
+      - name: Generate and lint proposed source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python (Join-Path $env:RUNNER_TEMP 'inject_generation_rollback.py')
+          python (Join-Path $env:RUNNER_TEMP 'polish_generation_rollback.py')
+          if (@(git diff --name-only $env:CANDIDATE_HEAD) -ne 'crates/uv/src/commands/self_update.rs') {
+            throw 'Generation changed files outside self_update.rs'
+          }
+          rustup component add rustfmt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo fmt --all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo fmt --all --check 2>&1 | Tee-Object -FilePath receipt/fmt.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --check
+          if (@(git diff --name-only $env:CANDIDATE_HEAD) -ne 'crates/uv/src/commands/self_update.rs') {
+            throw 'Formatting changed files outside self_update.rs'
+          }
+          git diff -- crates/uv/src/commands/self_update.rs |
+            Set-Content receipt/proposed-source.diff
+          Copy-Item crates/uv/src/commands/self_update.rs receipt/generated-self-update.rs
+
+      - name: Run hostile rollback and ownership matrix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test -p uv --lib --features self-update fieldwork_current_head_generation_rollback -- --nocapture 2>&1 |
+            Tee-Object -FilePath receipt/test.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path receipt/test.log -SimpleMatch 'generation_rollback_excludes_case_varied_current_executable ... ok')) {
+            throw 'case-varied current executable control did not execute successfully'
+          }
+          if (-not (Select-String -Path receipt/test.log -SimpleMatch 'generation_rollback_serializes_live_update_window ... ok')) {
+            throw 'live update serialization control did not execute successfully'
+          }
+
+      - name: Check affected Windows targets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo check -p uv --all-targets --features self-update 2>&1 |
+            Tee-Object -FilePath receipt/check.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Record experiment contract
+        if: always()
+        shell: pwsh
+        run: |
+          @{
+            experimentHead = $env:INPUT_HEAD
+            candidateHead = $env:CANDIDATE_HEAD
+            platform = 'windows-latest'
+            proposedGuarantee = 'one updater owns the live mutation window and a returned ordinary mutation error restores the pre-update managed generation'
+            controls = @(
+              'destructive finalizer error restores uv, companions, and receipt'
+              'mid-companion-copy error restores prior companion state'
+              'success commits uv, companions, and receipt'
+              'case-varied current executable is excluded by live path identity'
+              'second updater cannot enter the live mutation window before lock release'
+            )
+            excludedGuarantees = @(
+              'power loss or process termination during rollback'
+              'atomic multi-file visibility to read-only concurrent observers'
+              'full filesystem metadata restoration (ACLs, ADS, timestamps)'
+              'custom or GHE axoupdater route'
+            )
+          } | ConvertTo-Json -Depth 4 | Set-Content receipt/contract.json
+
+      - name: Upload exact Windows receipt
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: fieldwork-457-b2-current-head-generation-rollback
+          path: receipt/
+          if-no-files-found: error
+          retention-days: 30
+
+  materialize-source:
+    name: Materialize Windows-authoritative source candidate
+    needs:
+      - source-audit
+      - generation-rollback
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_BRANCH: candidate/457-b2-windows-generation-rollback
+    steps:
+      - name: Check out exact candidate base
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ env.CANDIDATE_HEAD }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Download Windows-authoritative generated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/windows-receipt"
+          gh run download "$GITHUB_RUN_ID" \
+            --name fieldwork-457-b2-current-head-generation-rollback \
+            --dir "$RUNNER_TEMP/windows-receipt"
+          test -f "$RUNNER_TEMP/windows-receipt/generated-self-update.rs"
+          grep -Fx "candidate_head=$CANDIDATE_HEAD" \
+            "$RUNNER_TEMP/windows-receipt/identity.txt"
+          cp "$RUNNER_TEMP/windows-receipt/generated-self-update.rs" \
+            crates/uv/src/commands/self_update.rs
+          git diff --check
+          test "$(git diff --name-only "$CANDIDATE_HEAD")" = \
+            'crates/uv/src/commands/self_update.rs'
+
+      - name: Commit source-only candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Fieldwork Agent'
+          git config user.email 'fieldwork-agent@users.noreply.github.com'
+          git checkout -B "$SOURCE_BRANCH"
+          git add crates/uv/src/commands/self_update.rs
+          git commit -m 'Roll back failed Windows update generations'
+          git push --force-with-lease origin "HEAD:refs/heads/$SOURCE_BRANCH"
