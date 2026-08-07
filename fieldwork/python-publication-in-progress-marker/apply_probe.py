@@ -139,6 +139,74 @@ fn python_install_marker_hides_failed_publication_residue() -> anyhow::Result<()
     Ok(())
 }
 
+#[test]
+#[cfg(unix)]
+fn python_reinstall_marker_hides_replaced_incomplete_installation() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_filtered_latest_python_versions()
+        .with_managed_python_dirs()
+        .with_python_download_cache();
+
+    context.python_install().arg("3.12.6").assert().success();
+    context.python_find().arg("3.12.6").assert().success();
+
+    let gate = context.temp_dir.child("reinstall-publication-gate");
+    gate.create_dir_all()?;
+    let published = gate.child("published");
+    let release = gate.child("continue");
+
+    let mut reinstall = context.python_install();
+    reinstall
+        .arg("--reinstall")
+        .arg("3.12.6")
+        .env(
+            "UV_INTERNAL__TEST_PYTHON_INSTALL_PAUSE_AFTER_PUBLISH",
+            gate.path(),
+        );
+    let mut child = reinstall.spawn().context("failed to spawn paused python reinstall")?;
+
+    let started = std::time::Instant::now();
+    while !published.path().exists() {
+        if started.elapsed() > std::time::Duration::from_secs(30) {
+            let _ = child.kill();
+            anyhow::bail!("managed Python reinstall publication pause was not reached");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let managed = context.temp_dir.child("managed");
+    let installation = fs_err::read_dir(managed.path())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("cpython-3.12.6-"))
+        })
+        .context("reinstalled managed Python final directory was not visible")?;
+    let in_progress = installation.join(".uv-installing");
+    assert!(in_progress.is_file());
+
+    // Existing version links from the prior successful installation still resolve into the
+    // replaced final path. Managed discovery must not accept that path while the marker exists.
+    let hidden = context.python_find().arg("3.12.6").output()?;
+    assert!(
+        !hidden.status.success(),
+        "python find unexpectedly discovered paused reinstall: {}",
+        String::from_utf8_lossy(&hidden.stdout)
+    );
+
+    release.touch()?;
+    let reinstall_status = child.wait()?;
+    assert!(reinstall_status.success());
+    assert!(!in_progress.exists());
+    context.python_find().arg("3.12.6").assert().success();
+
+    Ok(())
+}
+
 '''
 if text.count(marker) != 1:
     raise SystemExit(
