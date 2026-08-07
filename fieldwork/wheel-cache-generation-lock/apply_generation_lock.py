@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply cross-platform pointer publication locks and a protocol test."""
+"""Apply the bounded cross-platform pointer-publication lock to uv 544157."""
 
 from pathlib import Path
 import sys
