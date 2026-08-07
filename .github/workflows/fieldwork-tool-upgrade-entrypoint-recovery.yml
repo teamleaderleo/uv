@@ -1,0 +1,75 @@
+name: Fieldwork tool upgrade entrypoint recovery
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/tool-upgrade-entrypoint-recovery-base
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-recovery:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      SOURCE_BASE: 507230998c9541d67814b57463ac00e454ff6991
+    steps:
+      - name: Check out carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier boundary
+        shell: pwsh
+        run: |
+          $files = @(git diff --name-only '${{ github.event.pull_request.base.sha }}'...HEAD | Sort-Object)
+          $expected = @(
+            'scripts/fieldwork/generate-tool-upgrade-entrypoint-recovery.py',
+            'scripts/fieldwork/validate-tool-upgrade-entrypoint-recovery.ps1'
+          ) | Sort-Object
+          if (Compare-Object $expected $files) { throw 'unexpected carrier files' }
+          Copy-Item scripts/fieldwork/generate-tool-upgrade-entrypoint-recovery.py $env:RUNNER_TEMP/generate.py
+          Copy-Item scripts/fieldwork/validate-tool-upgrade-entrypoint-recovery.ps1 $env:RUNNER_TEMP/validate.ps1
+
+      - name: Generate exact-source candidate
+        shell: pwsh
+        run: |
+          git checkout --detach $env:SOURCE_BASE
+          python $env:RUNNER_TEMP/generate.py
+          rustup component add rustfmt clippy
+          cargo fmt --all
+          $files = @(git diff --name-only | Sort-Object)
+          $expected = @('crates/uv/src/commands/tool/upgrade.rs')
+          if (Compare-Object $expected $files) { throw 'unexpected generated source files' }
+          git diff --check
+          cargo fmt --all --check
+          git diff | Out-File -Encoding utf8 $env:RUNNER_TEMP/source.patch
+
+      - name: Compile affected source
+        shell: pwsh
+        run: |
+          cargo check --locked -p uv
+          cargo clippy --locked -p uv --lib -- -D warnings
+
+      - name: Build exact-source uv
+        shell: pwsh
+        run: cargo build --locked -p uv --features self-update
+
+      - name: Validate locked-entrypoint recovery
+        shell: pwsh
+        run: |
+          & $env:RUNNER_TEMP/validate.ps1 -UvPath (Resolve-Path target/debug/uv.exe) -Root (Join-Path $env:RUNNER_TEMP 'tool-upgrade-recovery')
+
+      - name: Retain receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tool-upgrade-entrypoint-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/source.patch
+            ${{ runner.temp }}/tool-upgrade-recovery/recovery-transcript.txt
+            ${{ runner.temp }}/tool-upgrade-recovery/tools/ruff/uv-receipt.toml
+          if-no-files-found: warn
+          retention-days: 14
