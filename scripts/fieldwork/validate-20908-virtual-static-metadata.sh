@@ -97,8 +97,9 @@ package = false
 EOF
 run_case virtual-valid 0
 
-# Negative control: ordinary packages retain the existing backend-fallback policy for the same
-# invalid requirement. With builds disabled, that fallback still terminates as a no-build error.
+# Negative control: an actual package (forced by an explicit build system) retains the existing
+# backend-fallback policy for the same invalid requirement. With builds disabled, that fallback
+# still terminates as a no-build error.
 mkdir -p "$ROOT/package-invalid"
 cat > "$ROOT/package-invalid/pyproject.toml" <<'EOF'
 [project]
@@ -106,6 +107,10 @@ name = "project"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = ["anyio<5>"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
 
 [tool.uv]
 no-build = true
