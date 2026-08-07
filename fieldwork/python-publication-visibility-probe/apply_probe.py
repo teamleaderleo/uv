@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add a fork-only pause after managed-Python publication and a native probe."""
+"""Add fork-only managed-Python publication/finalization probes."""
 
 from pathlib import Path
 import sys
@@ -21,6 +21,10 @@ new = """                let installation = ManagedPythonInstallation::new(path,
                         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                     }
                 }
+                if std::env::var_os(\"UV_INTERNAL__TEST_PYTHON_INSTALL_FAIL_AFTER_PUBLISH\").is_some()
+                {
+                    anyhow::bail!(\"injected managed Python failure after publication\");
+                }
                 if let Some(ref sender) = bytecode_compilation_sender {
 """
 if text.count(old) != 1:
@@ -34,7 +38,7 @@ text = tests.read_text(encoding="utf-8")
 marker = """#[test]
 fn python_reinstall() {
 """
-test = r'''#[test]
+tests_to_add = r'''#[test]
 #[cfg(unix)]
 fn python_install_is_discoverable_before_finalization() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
@@ -107,11 +111,69 @@ fn python_install_is_discoverable_before_finalization() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+#[cfg(unix)]
+fn python_install_failure_after_publish_leaves_discoverable_residue() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_filtered_latest_python_versions()
+        .with_managed_python_dirs()
+        .with_python_download_cache();
+
+    let failed = context
+        .python_install()
+        .arg("3.12.6")
+        .env("UV_INTERNAL__TEST_PYTHON_INSTALL_FAIL_AFTER_PUBLISH", "1")
+        .output()
+        .context("failed to run injected python install")?;
+    assert!(!failed.status.success());
+    assert!(
+        String::from_utf8_lossy(&failed.stderr)
+            .contains("injected managed Python failure after publication")
+    );
+
+    let managed = context.temp_dir.child("managed");
+    let installation = fs_err::read_dir(managed.path())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("cpython-3.12.6-"))
+        })
+        .context("failed install did not leave a published managed Python directory")?;
+    let externally_managed = installation.join("lib/python3.12/EXTERNALLY-MANAGED");
+    assert!(
+        !externally_managed.exists(),
+        "injected failure unexpectedly completed finalization"
+    );
+
+    let find = context
+        .python_find()
+        .arg("3.12.6")
+        .output()
+        .context("failed to find residue after injected install failure")?;
+    assert!(
+        find.status.success(),
+        "python find did not discover failed-install residue: {}",
+        String::from_utf8_lossy(&find.stderr)
+    );
+
+    context.python_install().arg("3.12.6").assert().success();
+    assert!(
+        externally_managed.exists(),
+        "normal retry did not complete managed Python finalization"
+    );
+
+    Ok(())
+}
+
 '''
 if text.count(marker) != 1:
     raise SystemExit(
         f"python install test insertion mismatch: expected 1, found {text.count(marker)}"
     )
-tests.write_text(text.replace(marker, test + marker), encoding="utf-8")
+tests.write_text(text.replace(marker, tests_to_add + marker), encoding="utf-8")
 
 print(root)
