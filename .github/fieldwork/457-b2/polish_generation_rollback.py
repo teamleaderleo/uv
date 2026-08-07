@@ -14,6 +14,56 @@ for old, new in replacements.items():
         raise SystemExit(f"expected exactly one occurrence of {old!r}, found {count}")
     text = text.replace(old, new, 1)
 
+# Serialize only the live generation commit. Downloading and staging may remain concurrent.
+old_import = "use uv_fs::Simplified;\n"
+new_import = "#[cfg(windows)]\nuse uv_fs::{LockedFile, LockedFileMode};\nuse uv_fs::Simplified;\n"
+if text.count(old_import) != 1:
+    raise SystemExit(f"expected one uv_fs import, found {text.count(old_import)}")
+text = text.replace(old_import, new_import, 1)
+
+old_commit = '''    #[cfg(windows)]
+    replace_from_temporary_install(
+        temporary_install_dir.path(),
+        temporary_config_dir.path(),
+        &receipt_path,
+        &install_prefix,
+        modify_path,
+    )?;
+'''
+new_commit = '''    #[cfg(windows)]
+    let _update_lock = acquire_windows_update_lock(&install_prefix).await?;
+    #[cfg(windows)]
+    replace_from_temporary_install(
+        temporary_install_dir.path(),
+        temporary_config_dir.path(),
+        &receipt_path,
+        &install_prefix,
+        modify_path,
+    )?;
+'''
+if text.count(old_commit) != 1:
+    raise SystemExit(f"expected one Windows live commit block, found {text.count(old_commit)}")
+text = text.replace(old_commit, new_commit, 1)
+
+lock_helper_anchor = "#[cfg(windows)]\nfn replace_from_temporary_install("
+lock_helper = '''#[cfg(windows)]
+async fn acquire_windows_update_lock(install_prefix: &Path) -> Result<LockedFile> {
+    Ok(LockedFile::acquire(
+        install_prefix.join(".uv-self-update.lock"),
+        LockedFileMode::Exclusive,
+        install_prefix.user_display(),
+    )
+    .await?)
+}
+
+#[cfg(windows)]
+fn replace_from_temporary_install('''
+if text.count(lock_helper_anchor) != 1:
+    raise SystemExit(
+        f"expected one replacement-helper anchor, found {text.count(lock_helper_anchor)}"
+    )
+text = text.replace(lock_helper_anchor, lock_helper, 1)
+
 mid_copy_start = text.index(
     "fn fieldwork_current_head_generation_rollback_restores_mid_copy_failure()"
 )
@@ -152,6 +202,34 @@ running_snapshot_test = r'''
 
         assert_eq!(fs_err::read(&live_uv)?, b"new-uv");
         assert_eq!(fs_err::read(&live_uvx)?, b"new-uvx");
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn fieldwork_current_head_generation_rollback_serializes_live_update_window() -> Result<()>
+    {
+        let install_dir = TempDir::new()?;
+        let first = acquire_windows_update_lock(install_dir.path()).await?;
+
+        let blocked = tokio::time::timeout(
+            Duration::from_millis(100),
+            acquire_windows_update_lock(install_dir.path()),
+        )
+        .await;
+        assert!(
+            blocked.is_err(),
+            "a second updater acquired the live-generation lock before the first released it"
+        );
+
+        drop(first);
+        let second = tokio::time::timeout(
+            Duration::from_secs(2),
+            acquire_windows_update_lock(install_dir.path()),
+        )
+        .await
+        .context("second updater did not acquire the lock after release")??;
+        drop(second);
         Ok(())
     }
 '''
