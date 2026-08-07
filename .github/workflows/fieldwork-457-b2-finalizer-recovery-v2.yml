@@ -1,0 +1,150 @@
+name: Fieldwork 457 B2 recoverable finalizer journals v2
+
+on:
+  pull_request:
+    paths:
+      - .github/fieldwork/457-b2/finalizer_recovery_v2.ps1
+      - .github/workflows/fieldwork-457-b2-deferred-finalizer.yml
+      - .github/workflows/fieldwork-457-b2-finalizer-recovery-v2.yml
+      - crates/uv-windows/src/lib.rs
+      - crates/uv-windows/src/update_finalizer.rs
+      - crates/uv/src/bin/fieldwork_deferred_update_finalizer.rs
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-457-b2-finalizer-recovery-v2-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  EXPERIMENT_BASE: dfcc528fc2ef9b4d829da2a604e194c41342147e
+  INPUT_HEAD: ${{ github.event.pull_request.head.sha }}
+  SOURCE_BRANCH: ${{ github.head_ref }}
+  CI: 1
+
+jobs:
+  recovery:
+    name: Windows recoverable finalizer journal matrix
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out exact recovery successor
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify exact base and source fence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((git rev-parse HEAD) -ne $env:INPUT_HEAD) {
+            throw 'Checkout does not match immutable pull-request head'
+          }
+          if ((git merge-base HEAD $env:EXPERIMENT_BASE) -ne $env:EXPERIMENT_BASE) {
+            throw 'Recovery successor does not descend from exact current finalizer head'
+          }
+          $expected = @(
+            '.github/fieldwork/457-b2/finalizer_recovery_v2.ps1'
+            '.github/workflows/fieldwork-457-b2-deferred-finalizer.yml'
+            '.github/workflows/fieldwork-457-b2-finalizer-recovery-v2.yml'
+            'crates/uv-windows/src/lib.rs'
+            'crates/uv-windows/src/update_finalizer.rs'
+            'crates/uv/src/bin/fieldwork_deferred_update_finalizer.rs'
+          ) | Sort-Object
+          $changed = @(git diff --name-only "$env:EXPERIMENT_BASE..HEAD") | Sort-Object
+          if (Compare-Object $expected $changed) {
+            throw "Unexpected recovery diff. Expected: $($expected -join ', '); actual: $($changed -join ', ')"
+          }
+          git diff --check "$env:EXPERIMENT_BASE..HEAD"
+          New-Item -ItemType Directory -Force -Path receipt | Out-Null
+          @(
+            "recovery_head=$env:INPUT_HEAD"
+            "experiment_base=$env:EXPERIMENT_BASE"
+            "source_branch=$env:SOURCE_BRANCH"
+            "runner=$env:RUNNER_OS"
+          ) | Set-Content receipt/identity.txt
+          rustc --version | Tee-Object -FilePath receipt/rust-version.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo --version | Tee-Object -FilePath receipt/cargo-version.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          shared-key: fieldwork-457-b2-finalizer-recovery-v2
+          cache-on-failure: true
+
+      - name: Format and build recovery driver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          rustup component add rustfmt 2>&1 | Tee-Object -FilePath receipt/rustfmt-install.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo fmt --all 2>&1 | Tee-Object -FilePath receipt/fmt.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $formatted = @(git diff --name-only)
+          if ($formatted.Count -gt 0 -and (
+              $formatted.Count -ne 1 -or
+              $formatted[0] -ne 'crates/uv-windows/src/update_finalizer.rs'
+          )) {
+            throw "Unexpected rustfmt output: $($formatted -join ', ')"
+          }
+          git diff --check
+          cargo build -p uv --bin fieldwork_deferred_update_finalizer --features self-update 2>&1 |
+            Tee-Object -FilePath receipt/build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Execute recovery matrix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .github/fieldwork/457-b2/finalizer_recovery_v2.ps1 `
+            -Helper (Join-Path $env:GITHUB_WORKSPACE 'target/debug/fieldwork_deferred_update_finalizer.exe') `
+            -ReceiptDirectory (Join-Path $env:GITHUB_WORKSPACE 'receipt') `
+            -MatrixRoot (Join-Path $env:RUNNER_TEMP 'finalizer-recovery-v2-matrix')
+
+      - name: Check affected Windows targets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo check -p uv --all-targets --features self-update 2>&1 |
+            Tee-Object -FilePath receipt/check.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Publish exact formatted source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $formatted = @(git diff --name-only)
+          if ($formatted.Count -eq 0) {
+            Add-Content receipt/identity.txt "formatted_source_head=$(git rev-parse HEAD)"
+            exit 0
+          }
+          if ($formatted.Count -ne 1 -or $formatted[0] -ne 'crates/uv-windows/src/update_finalizer.rs') {
+            throw "Unexpected source residue before publication: $($formatted -join ', ')"
+          }
+          git config user.name 'Fieldwork Agent'
+          git config user.email 'fieldwork-agent@users.noreply.github.com'
+          git add crates/uv-windows/src/update_finalizer.rs
+          git diff --cached --check
+          git commit -m 'style(windows): format update recovery finalizer'
+          $sourceHead = git rev-parse HEAD
+          Add-Content receipt/identity.txt "formatted_source_head=$sourceHead"
+          git push `
+            --force-with-lease="refs/heads/$env:SOURCE_BRANCH`:$env:INPUT_HEAD" `
+            origin "HEAD:refs/heads/$env:SOURCE_BRANCH"
+
+      - name: Upload exact receipt
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: fieldwork-457-b2-finalizer-recovery-v2
+          path: receipt/
+          if-no-files-found: error
+          retention-days: 30
