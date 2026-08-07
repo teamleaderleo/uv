@@ -56,8 +56,10 @@ jobs:
           cargo test --locked -p uv --test tool tool_audit_invalid_receipt -- --exact
           cargo test --locked -p uv --test tool tool_audit_invalid_lockfile -- --exact
           cargo test --locked -p uv --test tool tool_audit_unsupported_lockfile_version -- --exact
+          cargo test --locked -p uv --test tool tool_audit_mixed_lockfiles -- --exact
           cargo test --locked -p uv --test tool \
-            tool_audit_all_reports_partial_coverage_as_failure -- --exact
+            tool_audit_json_no_auditable_tools_after_skip -- --exact
+          cargo test --locked -p uv --test tool tool_audit_sarif_no_auditable_tools -- --exact
 
       - name: Upload exact candidate patch
         if: always()
