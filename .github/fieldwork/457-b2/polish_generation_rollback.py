@@ -33,6 +33,42 @@ for old, new in {
 
 text = text[:mid_copy_start] + mid_copy + text[mid_copy_end:]
 
+# Windows path lookup is ordinarily case-insensitive, while OsString/Path equality is not.
+# Excluding the running executable by staged filename spelling can therefore classify `uv.exe`
+# as a companion when the live process path is spelled `UV.EXE`. Compare the destination's live
+# filesystem identity with the current executable instead. Non-existent companion destinations
+# simply fail canonicalization and remain companions.
+old_companions = '''    let companions = entries
+        .into_iter()
+        .filter(|entry| entry.file_name() != current_file_name)
+        .map(|entry| {
+            let destination = install_dir.join(entry.file_name());
+            (entry.path(), destination)
+        })
+        .collect::<Vec<_>>();
+'''
+new_companions = '''    let current_executable_canonical = dunce::canonicalize(current_executable)
+        .unwrap_or_else(|_| current_executable.to_path_buf());
+    let companions = entries
+        .into_iter()
+        .filter_map(|entry| {
+            let destination = install_dir.join(entry.file_name());
+            if dunce::canonicalize(&destination)
+                .is_ok_and(|destination| destination == current_executable_canonical)
+            {
+                None
+            } else {
+                Some((entry.path(), destination))
+            }
+        })
+        .collect::<Vec<_>>();
+'''
+if text.count(old_companions) != 1:
+    raise SystemExit(
+        f"expected one companion-selection block, found {text.count(old_companions)}"
+    )
+text = text.replace(old_companions, new_companions, 1)
+
 running_snapshot_test = r'''
 
     #[cfg(windows)]
@@ -51,6 +87,71 @@ running_snapshot_test = r'''
             .context("running executable snapshot should have backup bytes")?;
         assert!(backup.is_file());
         assert!(files_are_equal(&current_executable, backup)?);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fieldwork_current_head_generation_rollback_excludes_case_varied_current_executable(
+    ) -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let staged_dir = temp_dir.path().join("staged");
+        let live_dir = temp_dir.path().join("live");
+        let staged_config_dir = temp_dir.path().join("staged-config");
+        let staged_receipt_dir = staged_config_dir.join("uv");
+        fs_err::create_dir_all(&staged_dir)?;
+        fs_err::create_dir_all(&live_dir)?;
+        fs_err::create_dir_all(&staged_receipt_dir)?;
+
+        // Use a different spelling from the staged payload. On ordinary Windows filesystems,
+        // these names identify the same live file despite not being equal Rust paths.
+        let live_uv = live_dir.join("UV.EXE");
+        let live_uvx = live_dir.join("uvx.exe");
+        let receipt_path = temp_dir.path().join("uv-receipt.json");
+        fs_err::write(&live_uv, b"old-uv")?;
+        fs_err::write(&live_uvx, b"old-uvx")?;
+        fs_err::write(staged_dir.join("uv.exe"), b"new-uv")?;
+        fs_err::write(staged_dir.join("uvx.exe"), b"new-uvx")?;
+        fs_err::write(
+            staged_receipt_dir.join("uv-receipt.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "binaries": ["uv", "uvx"],
+                "install_prefix": staged_dir,
+                "modify_path": false,
+                "version": "0.12.1"
+            }))?,
+        )?;
+        fs_err::write(
+            &receipt_path,
+            serde_json::to_vec(&serde_json::json!({
+                "binaries": ["uv", "uvx"],
+                "install_prefix": live_dir,
+                "modify_path": true,
+                "version": "0.12.0"
+            }))?,
+        )?;
+
+        replace_from_temporary_install_with(
+            &staged_dir,
+            &staged_config_dir,
+            &receipt_path,
+            &live_dir,
+            true,
+            &live_uv,
+            |replacement| {
+                assert_eq!(replacement, staged_dir.join("uv.exe"));
+                assert_eq!(
+                    fs_err::read(&live_uv)?,
+                    b"old-uv",
+                    "case-varied current executable was copied as a companion before finalization"
+                );
+                fs_err::write(&live_uv, b"new-uv")?;
+                Ok(())
+            },
+        )?;
+
+        assert_eq!(fs_err::read(&live_uv)?, b"new-uv");
+        assert_eq!(fs_err::read(&live_uvx)?, b"new-uvx");
         Ok(())
     }
 '''
