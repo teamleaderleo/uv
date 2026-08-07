@@ -32,7 +32,12 @@ pub(crate) const MANAGED_PYTHON_IN_PROGRESS_MARKER: &str = ".uv-installing";
 )
 replace(
     managed,
-    """            // Ignore any `.` prefixed directories
+    """        let scratch = self.scratch();
+        Ok(dirs
+            .into_iter()
+            // Ignore the scratch directory
+            .filter(|path| *path != scratch)
+            // Ignore any `.` prefixed directories
             .filter(|path| {
                 path.file_name()
                     .and_then(OsStr::to_str)
@@ -40,26 +45,39 @@ replace(
             })
             .filter_map(|path| {
 """,
-    """            // Ignore any `.` prefixed directories
+    """        let scratch = self.scratch();
+        let dirs = dirs
+            .into_iter()
+            // Ignore the scratch directory
+            .filter(|path| *path != scratch)
+            // Ignore any `.` prefixed directories
             .filter(|path| {
                 path.file_name()
                     .and_then(OsStr::to_str)
                     .is_none_or(|name| !name.starts_with('.'))
             })
             // Published managed Pythons remain hidden until command-level finalization succeeds.
-            .filter(|path| {
-                let in_progress = path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER).is_file();
-                if in_progress {
-                    debug!(
-                        "Skipping incomplete managed Python installation at `{}`",
-                        path.user_display()
-                    );
+            // The completion marker is a fail-closed safety boundary: any marker object means the
+            // installation is incomplete, while unexpected metadata errors abort discovery.
+            .map(|path| {
+                let marker = path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER);
+                match fs::symlink_metadata(&marker) {
+                    Ok(_) => {
+                        debug!(
+                            "Skipping incomplete managed Python installation at `{}`",
+                            path.user_display()
+                        );
+                        Ok(None)
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Some(path)),
+                    Err(err) => Err(Error::ReadError(err)),
                 }
-                !in_progress
             })
-            .filter_map(|path| {
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        Ok(dirs.into_iter().flatten().filter_map(|path| {
 """,
-    name="discovery marker gate",
+    name="fail-closed discovery marker gate",
 )
 replace(
     managed,
@@ -108,11 +126,17 @@ replace(
         );
         let path = installations.root().join(key.to_string());
         fs::create_dir_all(&path).unwrap();
-        fs::write(path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER), b"in-progress").unwrap();
+        let marker = path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER);
 
+        fs::write(&marker, b"in-progress").unwrap();
         assert_eq!(installations.find_all().unwrap().count(), 0);
+        fs::remove_file(&marker).unwrap();
 
-        fs::remove_file(path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER)).unwrap();
+        // Presence, not file type, owns the incomplete state.
+        fs::create_dir(&marker).unwrap();
+        assert_eq!(installations.find_all().unwrap().count(), 0);
+        fs::remove_dir(&marker).unwrap();
+
         let found = installations.find_all().unwrap().collect::<Vec<_>>();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].key(), &key);
