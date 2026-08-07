@@ -26,9 +26,17 @@ replace(
 
 pub(crate) const MANAGED_PYTHON_IN_PROGRESS_MARKER: &str = ".uv-installing";
 
+fn installation_is_in_progress(path: &Path) -> Result<bool, Error> {
+    match fs::symlink_metadata(path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER)) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(Error::ReadError(err)),
+    }
+}
+
 #[derive(Error, Debug)]
 """,
-    name="marker constant",
+    name="marker constant and helper",
 )
 replace(
     managed,
@@ -56,21 +64,18 @@ replace(
                     .and_then(OsStr::to_str)
                     .is_none_or(|name| !name.starts_with('.'))
             })
-            // Published managed Pythons remain hidden until command-level finalization succeeds.
-            // The completion marker is a fail-closed safety boundary: any marker object means the
-            // installation is incomplete, while unexpected metadata errors abort discovery.
+            // Published managed Pythons remain hidden until internal finalization succeeds.
+            // Any marker object means incomplete; unexpected marker metadata errors abort
+            // directory discovery rather than exposing a possibly incomplete installation.
             .map(|path| {
-                let marker = path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER);
-                match fs::symlink_metadata(&marker) {
-                    Ok(_) => {
-                        debug!(
-                            "Skipping incomplete managed Python installation at `{}`",
-                            path.user_display()
-                        );
-                        Ok(None)
-                    }
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Some(path)),
-                    Err(err) => Err(Error::ReadError(err)),
+                if installation_is_in_progress(&path)? {
+                    debug!(
+                        "Skipping incomplete managed Python installation at `{}`",
+                        path.user_display()
+                    );
+                    Ok(None)
+                } else {
+                    Ok(Some(path))
                 }
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -78,6 +83,23 @@ replace(
         Ok(dirs.into_iter().flatten().filter_map(|path| {
 """,
     name="fail-closed discovery marker gate",
+)
+replace(
+    managed,
+    """        // Construct the installation from the path within the managed root
+        let path = root.join(name);
+        Self::from_path(path).ok()
+""",
+    """        // Construct the installation from the path within the managed root. Refuse
+        // marker-bearing (or unreadable) paths here too: this reconstruction path can be reached
+        // from an already-discovered interpreter without going through `find_all()`.
+        let path = root.join(name);
+        if installation_is_in_progress(&path).ok()? {
+            return None;
+        }
+        Self::from_path(path).ok()
+""",
+    name="interpreter reconstruction marker gate",
 )
 replace(
     managed,
@@ -129,14 +151,17 @@ replace(
         let marker = path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER);
 
         fs::write(&marker, b"in-progress").unwrap();
+        assert!(installation_is_in_progress(&path).unwrap());
         assert_eq!(installations.find_all().unwrap().count(), 0);
         fs::remove_file(&marker).unwrap();
 
         // Presence, not file type, owns the incomplete state.
         fs::create_dir(&marker).unwrap();
+        assert!(installation_is_in_progress(&path).unwrap());
         assert_eq!(installations.find_all().unwrap().count(), 0);
         fs::remove_dir(&marker).unwrap();
 
+        assert!(!installation_is_in_progress(&path).unwrap());
         let found = installations.find_all().unwrap().collect::<Vec<_>>();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].key(), &key);
@@ -160,8 +185,8 @@ replace(
     """        // Remove the target if it already exists.
         if path.is_dir() {
 """,
-    """        // Publish an explicit command-finalization state with the installation. The marker
-        // is created before the final rename so every new visible generation starts incomplete.
+    """        // Publish an explicit internal-finalization state with the installation. The marker
+        // is created before the final rename so every newly visible generation starts incomplete.
         fs_err::write(extracted.join(MANAGED_PYTHON_IN_PROGRESS_MARKER), b"in-progress")?;
 
         // Remove the target if it already exists.
