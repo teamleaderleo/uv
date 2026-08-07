@@ -49,11 +49,13 @@ jobs:
             crates/uv/tests/python/python_install.rs)"
           git -C uv-current diff --binary > managed-python-publication-visibility.patch
 
-      - name: Execute publication visibility test
+      - name: Execute publication visibility tests
         working-directory: uv-current
         run: |
           cargo test --locked -p uv --test python --features test-python-managed \
             python_install::python_install_is_discoverable_before_finalization -- --exact --nocapture
+          cargo test --locked -p uv --test python --features test-python-managed \
+            python_install::python_install_failure_after_publish_leaves_discoverable_residue -- --exact --nocapture
 
       - name: Upload exact probe patch
         if: always()
