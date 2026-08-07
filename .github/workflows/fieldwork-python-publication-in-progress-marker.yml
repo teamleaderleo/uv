@@ -1,0 +1,113 @@
+name: Fieldwork managed Python in-progress marker
+
+on:
+  pull_request:
+    paths:
+      - "fieldwork/python-publication-in-progress-marker/**"
+      - ".github/workflows/fieldwork-python-publication-in-progress-marker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CURRENT_SOURCE_HEAD: 544157b31dbc6007bfdfe2789d3d068278fdb57d
+      CLEAN_SOURCE_BRANCH: fix/hide-incomplete-managed-python-installations
+    steps:
+      - name: Check out exact carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check out exact uv source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fieldwork/upstream-544157
+          path: uv-current
+          persist-credentials: false
+
+      - name: Prepare clean source and probe source
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git -C uv-current rev-parse HEAD)" = "$CURRENT_SOURCE_HEAD"
+          python3 -m py_compile \
+            fieldwork/python-publication-in-progress-marker/apply_candidate.py \
+            fieldwork/python-publication-in-progress-marker/apply_probe.py
+          cp -R uv-current uv-clean
+          python3 fieldwork/python-publication-in-progress-marker/apply_candidate.py uv-clean
+          python3 fieldwork/python-publication-in-progress-marker/apply_candidate.py uv-current
+          python3 fieldwork/python-publication-in-progress-marker/apply_probe.py uv-current
+          git -C uv-clean diff --check
+          git -C uv-current diff --check
+          rustup component add rustfmt
+          (cd uv-clean && cargo fmt --all)
+          (cd uv-clean && cargo fmt --all -- --check)
+          (cd uv-current && cargo fmt --all)
+          (cd uv-current && cargo fmt --all -- --check)
+          test "$(git -C uv-clean diff --name-only)" = "$(printf '%s\n' \
+            crates/uv-python/src/downloads.rs \
+            crates/uv-python/src/installation.rs \
+            crates/uv-python/src/managed.rs \
+            crates/uv/src/commands/python/install.rs)"
+          git -C uv-clean diff --binary > managed-python-marker-clean.patch
+          git -C uv-current diff --binary > managed-python-marker-probe.patch
+
+      - name: Run clean marker discovery invariant
+        working-directory: uv-clean
+        run: |
+          cargo test --locked -p uv-python find_all_skips_in_progress_installations -- --exact
+
+      - name: Run reversing publication controls
+        working-directory: uv-current
+        run: |
+          cargo test --locked -p uv --test python --features test-python-managed \
+            python_install::python_install_marker_hides_published_incomplete_installation -- --exact --nocapture
+          cargo test --locked -p uv --test python --features test-python-managed \
+            python_install::python_install_marker_hides_failed_publication_residue -- --exact --nocapture
+
+      - name: Publish exact clean source branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git -C uv-clean config user.name "teamleaderleo"
+          git -C uv-clean config user.email "13091533+teamleaderleo@users.noreply.github.com"
+          git -C uv-clean switch -C "$CLEAN_SOURCE_BRANCH"
+          git -C uv-clean add -- \
+            crates/uv-python/src/downloads.rs \
+            crates/uv-python/src/installation.rs \
+            crates/uv-python/src/managed.rs \
+            crates/uv/src/commands/python/install.rs
+          git -C uv-clean diff --cached --check
+          git -C uv-clean diff --cached --name-only > managed-python-marker-clean-files.txt
+          test "$(cat managed-python-marker-clean-files.txt)" = "$(printf '%s\n' \
+            crates/uv-python/src/downloads.rs \
+            crates/uv-python/src/installation.rs \
+            crates/uv-python/src/managed.rs \
+            crates/uv/src/commands/python/install.rs)"
+          git -C uv-clean commit -m "fix: hide incomplete managed Python installations"
+          git -C uv-clean push --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${CLEAN_SOURCE_BRANCH}"
+          git -C uv-clean rev-parse HEAD > managed-python-marker-clean-head.txt
+
+      - name: Upload exact receipts
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: fieldwork-python-publication-in-progress-marker
+          path: |
+            managed-python-marker-clean.patch
+            managed-python-marker-probe.patch
+            managed-python-marker-clean-files.txt
+            managed-python-marker-clean-head.txt
+          if-no-files-found: warn
+          retention-days: 30
