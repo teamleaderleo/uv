@@ -64,15 +64,28 @@ jobs:
       - name: Run clean marker discovery invariant
         working-directory: uv-clean
         run: |
-          cargo test --locked -p uv-python find_all_skips_in_progress_installations -- --exact
+          set -o pipefail
+          cargo test --locked -p uv-python \
+            managed::tests::find_all_skips_in_progress_installations \
+            -- --exact --nocapture 2>&1 | tee marker-unit-output.txt
+          grep -F "running 1 test" marker-unit-output.txt
+          grep -F "test managed::tests::find_all_skips_in_progress_installations ... ok" marker-unit-output.txt
 
       - name: Run reversing publication controls
         working-directory: uv-current
         run: |
+          set -o pipefail
           cargo test --locked -p uv --test python --features test-python-managed \
-            python_install::python_install_marker_hides_published_incomplete_installation -- --exact --nocapture
+            python_install::python_install_marker_hides_published_incomplete_installation -- --exact --nocapture \
+            2>&1 | tee marker-paused-output.txt
+          grep -F "running 1 test" marker-paused-output.txt
+          grep -F "test python_install::python_install_marker_hides_published_incomplete_installation ... ok" marker-paused-output.txt
+
           cargo test --locked -p uv --test python --features test-python-managed \
-            python_install::python_install_marker_hides_failed_publication_residue -- --exact --nocapture
+            python_install::python_install_marker_hides_failed_publication_residue -- --exact --nocapture \
+            2>&1 | tee marker-failed-output.txt
+          grep -F "running 1 test" marker-failed-output.txt
+          grep -F "test python_install::python_install_marker_hides_failed_publication_residue ... ok" marker-failed-output.txt
 
       - name: Publish exact clean source branch
         env:
@@ -109,5 +122,8 @@ jobs:
             managed-python-marker-probe.patch
             managed-python-marker-clean-files.txt
             managed-python-marker-clean-head.txt
+            uv-clean/marker-unit-output.txt
+            uv-current/marker-paused-output.txt
+            uv-current/marker-failed-output.txt
           if-no-files-found: warn
           retention-days: 30
