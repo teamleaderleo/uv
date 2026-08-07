@@ -1,0 +1,69 @@
+name: Fieldwork tool audit partial success
+
+on:
+  pull_request:
+    paths:
+      - "fieldwork/tool-audit-partial-success/**"
+      - ".github/workflows/fieldwork-tool-audit-partial-success.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CURRENT_SOURCE_HEAD: 544157b31dbc6007bfdfe2789d3d068278fdb57d
+    steps:
+      - name: Check out exact carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check out exact uv source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fieldwork/upstream-544157
+          path: uv-current
+          persist-credentials: false
+
+      - name: Apply exact candidate
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git -C uv-current rev-parse HEAD)" = "$CURRENT_SOURCE_HEAD"
+          python3 -m py_compile fieldwork/tool-audit-partial-success/apply_candidate.py
+          python3 fieldwork/tool-audit-partial-success/apply_candidate.py uv-current
+          git -C uv-current diff --check
+          rustup component add rustfmt
+          (cd uv-current && cargo fmt --all)
+          (cd uv-current && cargo fmt --all -- --check)
+          test "$(git -C uv-current diff --name-only)" = "$(printf '%s\n' \
+            crates/uv/src/commands/tool/audit.rs \
+            crates/uv/tests/tool/tool_audit.rs)"
+          git -C uv-current diff --binary > tool-audit-partial-success.patch
+
+      - name: Run focused audit completeness tests
+        working-directory: uv-current
+        run: |
+          cargo test --locked -p uv --test tool \
+            tool_audit_missing_lockfile \
+            tool_audit_invalid_receipt \
+            tool_audit_invalid_lockfile \
+            tool_audit_unsupported_lockfile_version \
+            tool_audit_all_reports_partial_coverage_as_failure
+
+      - name: Upload exact candidate patch
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: fieldwork-tool-audit-partial-success
+          path: tool-audit-partial-success.patch
+          if-no-files-found: warn
+          retention-days: 30
