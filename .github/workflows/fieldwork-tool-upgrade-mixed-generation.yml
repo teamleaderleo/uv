@@ -52,14 +52,20 @@ jobs:
       - name: Execute mixed-generation test
         working-directory: uv-current
         run: |
+          set -o pipefail
           cargo test --locked -p uv --test tool \
-            tool_upgrade_failure_before_metadata_publish_leaves_mixed_generation -- --exact --nocapture
+            tool_upgrade::tool_upgrade_failure_before_metadata_publish_leaves_mixed_generation \
+            -- --exact --nocapture 2>&1 | tee mixed-generation-test-output.txt
+          grep -F "running 1 test" mixed-generation-test-output.txt
+          grep -F "test tool_upgrade::tool_upgrade_failure_before_metadata_publish_leaves_mixed_generation ... ok" mixed-generation-test-output.txt
 
       - name: Upload exact probe patch
         if: always()
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
           name: fieldwork-tool-upgrade-mixed-generation
-          path: tool-upgrade-mixed-generation.patch
+          path: |
+            tool-upgrade-mixed-generation.patch
+            uv-current/mixed-generation-test-output.txt
           if-no-files-found: warn
           retention-days: 30
