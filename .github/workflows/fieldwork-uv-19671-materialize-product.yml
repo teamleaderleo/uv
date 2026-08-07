@@ -96,7 +96,7 @@ jobs:
           cargo fmt --all --check
           cargo check -p uv
 
-          cargo test --package uv --test it -- --list >../artifacts/product/native-tests.txt
+          cargo test --package uv --test project -- --list >../artifacts/product/native-tests.txt
           for test_name in \
             init_package_stubs_uv_backend \
             init_package_stubs_hatch_backend \
@@ -104,13 +104,17 @@ jobs:
             init_package \
             init_library
           do
-            test "$(grep -Ec "(^|::)${test_name}: test$" ../artifacts/product/native-tests.txt)" -eq 1
-            cargo test --package uv --test it "$test_name"
+            mapfile -t matches < <(
+              grep -E "(^|::)${test_name}: test$" ../artifacts/product/native-tests.txt || true
+            )
+            test "${#matches[@]}" -eq 1
+            full_name=${matches[0]%: test}
+            cargo test --package uv --test project "$full_name" -- --exact
           done
 
           cargo build --bin uv
 
-      - name: Run 16-case backend build matrix
+      - name: Run package/library backend matrix
         env:
           UV_NO_PROGRESS: 1
         run: |
@@ -118,6 +122,34 @@ jobs:
           bash carrier/.github/fieldwork/19671-current-main/backend_matrix.sh \
             "$PWD/source/target/debug/uv" \
             "$PWD/artifacts/product"
+
+          python3 - "$PWD/artifacts/product/summary.tsv" >>"$GITHUB_STEP_SUMMARY" <<'PY'
+          import csv
+          import sys
+
+          with open(sys.argv[1], newline="") as file:
+              rows = list(csv.DictReader(file, delimiter="\t"))
+
+          print("## Stub-package backend matrix")
+          print()
+          print("| kind | backend | init | build | generated layout | project scripts |")
+          print("| --- | --- | --- | --- | --- | --- |")
+          for row in rows:
+              if row["hyphen_pyi"] == "1":
+                  layout = "`foo-stubs/__init__.pyi`"
+              elif row["underscore_py"] == "1":
+                  layout = "`foo_stubs/__init__.py`"
+              elif row["hyphen_py"] == "1":
+                  layout = "`foo-stubs/__init__.py`"
+              else:
+                  layout = "missing"
+              init = "pass" if row["init_status"] == "0" else f"fail ({row['init_status']})"
+              build = "pass" if row["build_status"] == "0" else f"fail ({row['build_status']})"
+              scripts = "yes" if row["project_scripts"] == "1" else "no"
+              print(
+                  f"| {row['kind']} | {row['backend']} | {init} | {build} | {layout} | {scripts} |"
+              )
+          PY
 
       - name: Commit and push bounded product branch
         working-directory: source
