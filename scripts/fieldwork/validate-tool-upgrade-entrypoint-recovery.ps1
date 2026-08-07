@@ -1,4 +1,5 @@
 # Current-main Windows recovery matrix for the source experiment.
+# Carrier rerun after base-ref boundary repair.
 param(
     [Parameter(Mandatory = $true)][string]$UvPath,
     [Parameter(Mandatory = $true)][string]$Root
