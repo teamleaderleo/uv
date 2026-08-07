@@ -259,7 +259,7 @@ fn ensure_regular_file(path: &Path, description: &str) -> io::Result<()> {
 }
 
 fn sync_file(path: &Path) -> io::Result<()> {
-    File::open(path)?.sync_all()
+    OpenOptions::new().read(true).write(true).open(path)?.sync_all()
 }
 
 fn write_ready_marker(path: &Path, parent_process_id: u32) -> io::Result<()> {
