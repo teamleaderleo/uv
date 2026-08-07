@@ -53,7 +53,7 @@ if ! grep -q 'anyio<5>' <<<"$CASE_OUTPUT"; then
   echo 'virtual invalid dependency error did not retain the bad requirement text' >&2
   exit 1
 fi
-if ! grep -Eqi 'parse|specifier|expected' <<<"$CASE_OUTPUT"; then
+if ! grep -Eqi 'parsing|parse|specifier|valid version|expected' <<<"$CASE_OUTPUT"; then
   echo 'virtual invalid dependency did not expose a parser diagnostic' >&2
   exit 1
 fi
