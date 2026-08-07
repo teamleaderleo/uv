@@ -1,0 +1,68 @@
+# Design sketch only. This is intentionally not a compile-ready patch.
+# It records the contract that a production change and tests must settle.
+
+diff --git a/crates/uv-distribution/src/archive.rs b/crates/uv-distribution/src/archive.rs
+--- a/crates/uv-distribution/src/archive.rs
++++ b/crates/uv-distribution/src/archive.rs
+@@
++pub(crate) enum ArchiveStatus {
++    Missing,
++    Reusable,
++    Corrupt(ArchiveCorruption),
++}
++
+ impl Archive {
+-    /// Returns `true` if the archive exists in the cache.
+-    pub(crate) fn exists(&self, cache: &Cache) -> bool {
+-        self.version == ARCHIVE_VERSION && cache.archive(&self.id).exists()
++    /// Determines whether an extracted wheel archive is complete enough to
++    /// reuse. Directory presence alone is not a validity receipt.
++    pub(crate) fn status(&self, cache: &Cache) -> Result<ArchiveStatus, Error> {
++        if self.version != ARCHIVE_VERSION {
++            return Ok(ArchiveStatus::Missing);
++        }
++
++        let path = cache.archive(&self.id);
++        if !path.is_dir() {
++            return Ok(ArchiveStatus::Missing);
++        }
++
++        // Validate every RECORD member that carries a digest or size. This
++        // must reject missing, truncated, and altered package files, not only
++        // an empty METADATA file. The final implementation should decide
++        // whether a safely persisted validation receipt can avoid repeated
++        // hashing on the common path.
++        match validate_against_wheel_record(&path, &self.filename)? {
++            Validation::Complete => Ok(ArchiveStatus::Reusable),
++            Validation::Corrupt(reason) => Ok(ArchiveStatus::Corrupt(reason)),
++        }
+     }
+ }
+
+diff --git a/crates/uv-distribution/src/source_distribution.rs b/crates/uv-distribution/src/source_distribution.rs
+--- a/crates/uv-distribution/src/source_distribution.rs
++++ b/crates/uv-distribution/src/source_distribution.rs
+@@
+-    if archive.exists(cache) {
+-        return Ok(archive);
++    match archive.status(cache)? {
++        ArchiveStatus::Reusable => return Ok(archive),
++        ArchiveStatus::Missing => {}
++        ArchiveStatus::Corrupt(reason) => {
++            // Remove the archive and its referring cache entry under the
++            // existing cache lock, record the reason, and re-extract once.
++            invalidate_corrupt_archive(cache, &archive, reason).await?;
++        }
+     }
+
+# Required tests:
+#
+# 1. present directory with zero-byte METADATA -> corrupt and refetch;
+# 2. intact METADATA with truncated package module -> corrupt and refetch;
+# 3. missing RECORD member -> corrupt and refetch;
+# 4. digest mismatch -> corrupt and refetch;
+# 5. valid archive -> reusable;
+# 6. concurrent readers observing one corrupt archive -> one invalidation and
+#    one replacement under the cache lock;
+# 7. process interruption before link publication -> missing, never reusable;
+# 8. crash/power-loss experiment for any completion receipt added later.

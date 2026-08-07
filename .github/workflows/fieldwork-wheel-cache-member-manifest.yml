@@ -1,0 +1,214 @@
+name: Fieldwork wheel cache member manifest
+
+on:
+  pull_request:
+    paths:
+      - 'fieldwork/wheel-cache-crash-consistency/**'
+      - '.github/workflows/fieldwork-wheel-cache-member-manifest.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CURRENT_SOURCE_HEAD: 0cf7c4561b7c7159ab9479719a12573d0a6aa3bb
+      CLEAN_SOURCE_BRANCH: fix/validate-extracted-wheel-cache-members
+    steps:
+      - name: Check out exact carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check out exact current uv source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fieldwork/upstream-0cf7c456
+          path: uv-current
+          persist-credentials: false
+
+      - name: Verify identities and transformations
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git -C uv-current rev-parse HEAD)" = "$CURRENT_SOURCE_HEAD"
+          python3 -m py_compile \
+            fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
+            fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
+            fieldwork/wheel-cache-crash-consistency/repro_missing_http_archive.py \
+            fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py
+          cp -R uv-current uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py \
+            uv-transform-check
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py \
+            uv-transform-check
+          git -C uv-transform-check diff --check
+          test "$(git -C uv-transform-check diff --name-only)" = "$(printf '%s\n' \
+            crates/uv-distribution/src/archive.rs \
+            crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-install-wheel/src/lib.rs \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-installer/src/plan.rs)"
+          rm -rf uv-transform-check
+
+      - name: Build exact current baseline
+        working-directory: uv-current
+        run: cargo build --locked --bin uv
+
+      - name: Reproduce current-head present corruption
+        run: |
+          python3 fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
+            --uv uv-current/target/debug/uv \
+            | tee fieldwork-wheel-cache-corruption-baseline.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(Path('fieldwork-wheel-cache-corruption-baseline.json').read_text())
+          outcomes = {row['mode']: row['outcome'] for row in receipt['scenarios']}
+          assert outcomes == {
+              'clean-control': 'healthy-control',
+              'metadata-zero': 'bug-reproduced',
+              'module-corrupt': 'bug-reproduced',
+          }, outcomes
+          PY
+
+      - name: Apply pointer and member-manifest candidate
+        run: |
+          python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
+            uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py uv-current
+          git -C uv-current diff --check
+          rustup component add rustfmt
+          (cd uv-current && cargo fmt --all)
+          (cd uv-current && cargo fmt --all -- --check)
+          git -C uv-current diff --name-only \
+            > fieldwork-wheel-cache-manifest-files.txt
+          test "$(cat fieldwork-wheel-cache-manifest-files.txt)" = "$(printf '%s\n' \
+            crates/uv-distribution/src/archive.rs \
+            crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-install-wheel/src/lib.rs \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-installer/src/plan.rs)"
+          git -C uv-current diff --binary \
+            > fieldwork-wheel-cache-manifest-tested.patch
+
+      - name: Build member-manifest candidate
+        working-directory: uv-current
+        run: cargo build --locked --bin uv
+
+      - name: Execute present-corruption recovery controls
+        run: |
+          set +e
+          python3 fieldwork/wheel-cache-crash-consistency/repro_corrupt_archive.py \
+            --uv uv-current/target/debug/uv \
+            | tee fieldwork-wheel-cache-corruption-candidate.json
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -eq 0 -o "$status" -eq 3
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(Path('fieldwork-wheel-cache-corruption-candidate.json').read_text())
+          scenarios = {row['mode']: row for row in receipt['scenarios']}
+          assert scenarios['clean-control']['outcome'] == 'healthy-control', scenarios['clean-control']
+          for mode in ('metadata-zero', 'module-corrupt'):
+              row = scenarios[mode]
+              old_root = row['archive_before']['root']
+              original_module = row['archive_before']['module']['sha256']
+              healthy_replacements = [
+                  archive for archive in row['archives_after_retry']
+                  if archive['root'] != old_root
+                  and archive['metadata']['size'] > 0
+                  and archive['module']['sha256'] == original_module
+              ]
+              assert healthy_replacements, row
+              assert row['second_install'][-1]['returncode'] == 0, row
+              assert row['second_verification']['returncode'] == 0, row
+          PY
+
+      - name: Execute missing-target recovery controls
+        run: |
+          python3 fieldwork/wheel-cache-crash-consistency/repro_missing_local_archive.py \
+            --uv uv-current/target/debug/uv \
+            | tee fieldwork-wheel-cache-manifest-missing-local.json
+          python3 fieldwork/wheel-cache-crash-consistency/repro_missing_http_archive.py \
+            --uv uv-current/target/debug/uv \
+            | tee fieldwork-wheel-cache-manifest-missing-http.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for name in ('local', 'http'):
+              receipt = json.loads(Path(f'fieldwork-wheel-cache-manifest-missing-{name}.json').read_text())
+              assert receipt['outcome'] == 'recovered', receipt
+              assert receipt['source_wheel_unchanged'] is True, receipt
+          PY
+
+      - name: Run focused crate tests
+        working-directory: uv-current
+        run: |
+          cargo test --locked -p uv-distribution archive::tests
+          cargo test --locked -p uv-install-wheel wheel::tests
+          cargo test --locked -p uv-installer plan::tests
+
+      - name: Publish exact clean manifest branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git -C uv-current config user.name "teamleaderleo"
+          git -C uv-current config user.email "13091533+teamleaderleo@users.noreply.github.com"
+          git -C uv-current switch -C "$CLEAN_SOURCE_BRANCH"
+          git -C uv-current add -- \
+            crates/uv-distribution/src/archive.rs \
+            crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-install-wheel/src/lib.rs \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-installer/src/plan.rs
+          git -C uv-current diff --cached --check
+          git -C uv-current diff --cached --name-only \
+            > fieldwork-wheel-cache-manifest-clean-files.txt
+          cmp fieldwork-wheel-cache-manifest-files.txt fieldwork-wheel-cache-manifest-clean-files.txt
+          git -C uv-current commit -m "fix: validate extracted wheel cache members"
+          git -C uv-current push --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${CLEAN_SOURCE_BRANCH}"
+          git -C uv-current rev-parse HEAD \
+            > fieldwork-wheel-cache-manifest-clean-head.txt
+
+      - name: Upload exact receipts
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: fieldwork-wheel-cache-member-manifest
+          path: |
+            fieldwork-wheel-cache-corruption-baseline.json
+            fieldwork-wheel-cache-corruption-candidate.json
+            fieldwork-wheel-cache-manifest-missing-local.json
+            fieldwork-wheel-cache-manifest-missing-http.json
+            fieldwork-wheel-cache-manifest-files.txt
+            fieldwork-wheel-cache-manifest-tested.patch
+            fieldwork-wheel-cache-manifest-clean-files.txt
+            fieldwork-wheel-cache-manifest-clean-head.txt
+          if-no-files-found: warn
+          retention-days: 30

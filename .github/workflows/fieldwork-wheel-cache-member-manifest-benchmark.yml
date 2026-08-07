@@ -1,0 +1,135 @@
+name: Fieldwork wheel cache member manifest benchmark
+
+on:
+  pull_request:
+    paths:
+      - 'fieldwork/wheel-cache-crash-consistency/benchmark_member_validation.py'
+      - 'fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py'
+      - 'fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py'
+      - 'fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py'
+      - 'fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py'
+      - 'fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py'
+      - '.github/workflows/fieldwork-wheel-cache-member-manifest-benchmark.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CURRENT_SOURCE_HEAD: 0cf7c4561b7c7159ab9479719a12573d0a6aa3bb
+    steps:
+      - name: Check out exact carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check out exact uv source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fieldwork/upstream-0cf7c456
+          path: uv-current
+          persist-credentials: false
+
+      - name: Verify identities and benchmark syntax
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git -C uv-current rev-parse HEAD)" = "$CURRENT_SOURCE_HEAD"
+          python3 -m py_compile \
+            fieldwork/wheel-cache-crash-consistency/benchmark_member_validation.py \
+            fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py
+
+      - name: Build exact baseline
+        working-directory: uv-current
+        run: cargo build --locked --bin uv
+
+      - name: Preserve baseline binary
+        run: |
+          cp uv-current/target/debug/uv uv-baseline
+          chmod +x uv-baseline
+          ./uv-baseline --version
+
+      - name: Apply member-manifest candidate
+        run: |
+          python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py uv-current
+          git -C uv-current diff --check
+          test "$(git -C uv-current diff --name-only)" = "$(printf '%s\n' \
+            crates/uv-distribution/src/archive.rs \
+            crates/uv-distribution/src/distribution_database.rs \
+            crates/uv-install-wheel/src/lib.rs \
+            crates/uv-install-wheel/src/wheel.rs \
+            crates/uv-installer/src/plan.rs)"
+          rustup component add rustfmt
+          (cd uv-current && cargo fmt --all)
+          (cd uv-current && cargo fmt --all -- --check)
+
+      - name: Build candidate
+        working-directory: uv-current
+        run: cargo build --locked --bin uv
+
+      - name: Execute balanced warm-cache comparison
+        run: |
+          python3 fieldwork/wheel-cache-crash-consistency/benchmark_member_validation.py \
+            --baseline-uv uv-baseline \
+            --candidate-uv uv-current/target/debug/uv \
+            --repeats 6 \
+            --counts 100 1000 5000 \
+            | tee fieldwork-wheel-cache-member-validation-benchmark.json
+
+      - name: Validate benchmark receipt
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(
+              Path('fieldwork-wheel-cache-member-validation-benchmark.json').read_text()
+          )
+          assert receipt['evidence_class'] == 'target-executed-balanced-warm-cache-comparison'
+          assert receipt['threshold_enforced'] is False
+          assert [case['member_count'] for case in receipt['cases']] == [100, 1000, 5000]
+          expected_order = [
+              ['baseline', 'candidate'],
+              ['candidate', 'baseline'],
+              ['baseline', 'candidate'],
+              ['candidate', 'baseline'],
+              ['baseline', 'candidate'],
+              ['candidate', 'baseline'],
+          ]
+          for case in receipt['cases']:
+              assert case['execution_order'] == expected_order, case
+              assert case['baseline']['repeats'] == 6, case
+              assert case['candidate']['repeats'] == 6, case
+              assert case['baseline']['median_ms'] > 0, case
+              assert case['candidate']['median_ms'] > 0, case
+              assert case['candidate_to_baseline_median_ratio'] > 0, case
+              assert all(case['baseline']['cache_hit_receipts']), case
+              assert all(case['candidate']['cache_hit_receipts']), case
+              assert case['baseline']['verification_returncode'] == 0, case
+              assert case['candidate']['verification_returncode'] == 0, case
+          PY
+
+      - name: Upload benchmark receipt
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: fieldwork-wheel-cache-member-validation-benchmark
+          path: fieldwork-wheel-cache-member-validation-benchmark.json
+          if-no-files-found: warn
+          retention-days: 30

@@ -1,0 +1,79 @@
+name: Fieldwork wheel cache generation race
+
+on:
+  pull_request:
+    paths:
+      - 'fieldwork/wheel-cache-crash-consistency/apply_generation_race_test.py'
+      - 'fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py'
+      - 'fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py'
+      - 'fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py'
+      - 'fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py'
+      - 'fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py'
+      - '.github/workflows/fieldwork-wheel-cache-generation-race.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CURRENT_SOURCE_HEAD: 0cf7c4561b7c7159ab9479719a12573d0a6aa3bb
+    steps:
+      - name: Check out exact carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check out exact uv source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fieldwork/upstream-0cf7c456
+          path: uv-current
+          persist-credentials: false
+
+      - name: Verify exact identities and transformations
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git -C uv-current rev-parse HEAD)" = "$CURRENT_SOURCE_HEAD"
+          python3 -m py_compile \
+            fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py \
+            fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py \
+            fieldwork/wheel-cache-crash-consistency/apply_generation_race_test.py
+          python3 fieldwork/wheel-cache-crash-consistency/apply_pointer_archive.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_archive.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_record.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_export.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_manifest_database.py uv-current
+          python3 fieldwork/wheel-cache-crash-consistency/apply_generation_race_test.py uv-current
+          git -C uv-current diff --check
+          rustup component add rustfmt
+          (cd uv-current && cargo fmt --all)
+          (cd uv-current && cargo fmt --all -- --check)
+          git -C uv-current diff --binary > fieldwork-wheel-cache-generation-race.patch
+
+      - name: Execute deterministic generation replay
+        working-directory: uv-current
+        run: |
+          cargo test --locked -p uv-distribution \
+            pointer_and_link_publication_can_diverge \
+            -- --nocapture
+
+      - name: Upload exact test patch
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: fieldwork-wheel-cache-generation-race
+          path: fieldwork-wheel-cache-generation-race.patch
+          if-no-files-found: warn
+          retention-days: 30

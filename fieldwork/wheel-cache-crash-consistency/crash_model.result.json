@@ -1,0 +1,18 @@
+{
+  "directory-exists": {
+    "cases": 6,
+    "unsafe_trust_cases": 1
+  },
+  "durable-marker": {
+    "cases": 14,
+    "unsafe_trust_cases": 0
+  },
+  "marker-only": {
+    "cases": 8,
+    "unsafe_trust_cases": 1
+  },
+  "verify-contents": {
+    "cases": 6,
+    "unsafe_trust_cases": 0
+  }
+}
