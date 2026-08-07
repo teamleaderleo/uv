@@ -1,0 +1,71 @@
+name: Fieldwork tool upgrade mixed generation
+
+on:
+  pull_request:
+    paths:
+      - "fieldwork/tool-upgrade-mixed-generation-probe/**"
+      - ".github/workflows/fieldwork-tool-upgrade-mixed-generation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CURRENT_SOURCE_HEAD: 544157b31dbc6007bfdfe2789d3d068278fdb57d
+    steps:
+      - name: Check out exact carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check out exact uv source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fieldwork/upstream-544157
+          path: uv-current
+          persist-credentials: false
+
+      - name: Apply exact failpoint probe
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git -C uv-current rev-parse HEAD)" = "$CURRENT_SOURCE_HEAD"
+          python3 -m py_compile fieldwork/tool-upgrade-mixed-generation-probe/apply_probe.py
+          python3 fieldwork/tool-upgrade-mixed-generation-probe/apply_probe.py uv-current
+          git -C uv-current diff --check
+          rustup component add rustfmt
+          (cd uv-current && cargo fmt --all)
+          (cd uv-current && cargo fmt --all -- --check)
+          test "$(git -C uv-current diff --name-only)" = "$(printf '%s\n' \
+            crates/uv/src/commands/tool/common.rs \
+            crates/uv/tests/tool/tool_upgrade.rs)"
+          git -C uv-current diff --binary > tool-upgrade-mixed-generation.patch
+
+      - name: Execute mixed-generation test
+        working-directory: uv-current
+        run: |
+          set -o pipefail
+          cargo test --locked -p uv --test tool \
+            tool_upgrade::tool_upgrade_failure_before_metadata_publish_leaves_mixed_generation \
+            -- --exact --nocapture 2>&1 | tee mixed-generation-test-output.txt
+          grep -F "running 1 test" mixed-generation-test-output.txt
+          grep -F "test tool_upgrade::tool_upgrade_failure_before_metadata_publish_leaves_mixed_generation ... ok" mixed-generation-test-output.txt
+
+      - name: Upload exact probe patch
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: fieldwork-tool-upgrade-mixed-generation
+          path: |
+            tool-upgrade-mixed-generation.patch
+            uv-current/mixed-generation-test-output.txt
+          if-no-files-found: warn
+          retention-days: 30
