@@ -35,9 +35,11 @@ def patch_source() -> None:
                 let uv_stub_package = build_backend == ProjectBuildBackend::Uv
                     && stubs_package_module_dir(name).is_some();
 
-                // uv_build treats PEP 561 stub packages as type-only distributions and
-                // therefore does not have a runtime module to expose as a console script.
-                // Other backends retain their existing generated application contract.
+                // Since it'll be packaged, we can add a `[project.scripts]` entry.
+                //
+                // uv_build treats PEP 561 stub packages as type-only distributions, so they
+                // do not have a runtime module to expose as a console script. Other backends
+                // retain their existing generated application contract.
                 if !uv_stub_package {
                     pyproject.push('\n');
                     pyproject.push_str(&pyproject_project_scripts(name, name.as_str(), "main"));
@@ -101,7 +103,7 @@ enum GitDiscoveryResult {
 def patch_tests() -> None:
     text = TESTS.read_text(encoding="utf-8")
 
-    tests = r'''/// Stub-only packages use the PEP 561 layout when initialized for uv_build.
+    tests = r'''/// Test that stub-only packages use the PEP 561 layout with uv_build.
 #[test]
 fn init_package_stubs_uv_backend() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -131,7 +133,7 @@ fn init_package_stubs_uv_backend() -> Result<()> {
     Ok(())
 }
 
-/// Third-party backends retain their existing package layout and script contract.
+/// Test that third-party backends retain their existing package layout and script contract.
 #[test]
 fn init_package_stubs_hatch_backend() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -161,7 +163,7 @@ fn init_package_stubs_hatch_backend() -> Result<()> {
     Ok(())
 }
 
-/// Third-party library initialization remains script-free and uses its normal module layout.
+/// Test that third-party libraries remain script-free and use their normal module layout.
 #[test]
 fn init_library_stubs_hatch_backend() -> Result<()> {
     let context = uv_test::test_context!("3.12");
