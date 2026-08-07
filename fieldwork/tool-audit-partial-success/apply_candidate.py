@@ -15,6 +15,13 @@ def replace(path: Path, old: str, new: str, *, name: str, count: int = 1) -> Non
     path.write_text(text.replace(old, new), encoding="utf-8")
 
 
+def function_section(text: str, function: str) -> tuple[int, int, str]:
+    start = text.index(f"fn {function}")
+    next_test = text.find("\n#[", start + 1)
+    end = len(text) if next_test == -1 else next_test
+    return start, end, text[start:end]
+
+
 audit = root / "crates/uv/src/commands/tool/audit.rs"
 replace(
     audit,
@@ -76,7 +83,10 @@ for name, warning in [
     replace(
         audit,
         warning,
-        warning.replace("                continue;", "                skipped_tools = true;\n                continue;"),
+        warning.replace(
+            "                continue;",
+            "                skipped_tools = true;\n                continue;",
+        ),
         name=name,
     )
 
@@ -110,51 +120,65 @@ replace(
 
 tests = root / "crates/uv/tests/tool/tool_audit.rs"
 text = tests.read_text(encoding="utf-8")
+
+# These all-tools tests have one aggregate success snapshot each. Explicit named-tool
+# failure snapshots in the same functions are intentionally left unchanged.
 for function in [
     "tool_audit_missing_lockfile",
     "tool_audit_invalid_receipt",
     "tool_audit_invalid_lockfile",
     "tool_audit_unsupported_lockfile_version",
+    "tool_audit_mixed_lockfiles",
 ]:
-    start = text.index(f"fn {function}")
-    next_test = text.find("\n#[", start + 1)
-    end = len(text) if next_test == -1 else next_test
-    section = text[start:end]
+    start, end, section = function_section(text, function)
     if section.count("exit_code: 0 (success)") != 1:
         raise SystemExit(f"{function} expected one aggregate success snapshot")
     section = section.replace("exit_code: 0 (success)", "exit_code: 2 (failure)", 1)
     text = text[:start] + section + text[end:]
 
-marker = """#[tokio::test]
-async fn tool_audit_multiple_tools() {
-"""
-partial_test = r"""#[tokio::test]
-async fn tool_audit_all_reports_partial_coverage_as_failure() {
-    let context = uv_test::test_context!("3.13");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
-    install_tool(&context, "basic-app", false);
+# The SARIF no-auditable test has two snapshots: a truly empty inventory should
+# remain success; only the second snapshot (installed but skipped tool) becomes failure.
+start, end, section = function_section(text, "tool_audit_sarif_no_auditable_tools")
+if section.count("exit_code: 0 (success)") != 2:
+    raise SystemExit("SARIF no-auditable test expected two success snapshots")
+last = section.rfind("exit_code: 0 (success)")
+section = section[:last] + "exit_code: 2 (failure)" + section[last + len("exit_code: 0 (success)") :]
+text = text[:start] + section + text[end:]
 
-    let server = MockServer::start().await;
-    mount_clean_service(&server).await;
+# JSON should keep rendering the valid empty schema while signaling incomplete coverage.
+marker = """#[tokio::test]
+async fn tool_audit_json_preview_warning() {
+"""
+json_test = r'''#[test]
+fn tool_audit_json_no_auditable_tools_after_skip() {
+    let context = uv_test::test_context!("3.12");
+    let tool_dir = context.temp_dir.child("tools");
+    install_tool(&context, "simple-launcher", false);
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("--all")
-        .arg("--service-url")
-        .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .arg("--output-format")
+        .arg("json")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks,json-output")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @r#"
     exit_code: 2 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "tools": []
+    }
+
     ----- stderr -----
-    warning: Skipping tool `basic-app` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it
-    Auditing `simple-launcher`
-    Found no known vulnerabilities and no adverse project statuses in 1 package
-    ");
+    warning: Skipping tool `simple-launcher` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it
+    "#);
 }
 
-"""
+'''
 if text.count(marker) != 1:
-    raise SystemExit("partial coverage test insertion point mismatch")
-tests.write_text(text.replace(marker, partial_test + marker), encoding="utf-8")
+    raise SystemExit("JSON skipped-tool insertion point mismatch")
+text = text.replace(marker, json_test + marker)
 
+tests.write_text(text, encoding="utf-8")
 print(root)
