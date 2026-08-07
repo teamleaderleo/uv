@@ -44,7 +44,7 @@ use crate::implementation::{
     Error as ImplementationError, ImplementationName, LenientImplementationName,
 };
 use crate::installation::PythonInstallationKey;
-use crate::managed::ManagedPythonInstallation;
+use crate::managed::{MANAGED_PYTHON_IN_PROGRESS_MARKER, ManagedPythonInstallation};
 use crate::python_version::{BuildVersionError, python_build_version_from_env};
 use crate::{Interpreter, PythonRequest, PythonVersion, VersionRequest};
 
@@ -1397,6 +1397,13 @@ impl ManagedPythonDownload {
                 }
             }
         }
+
+        // Publish an explicit internal-finalization state with the installation. The marker
+        // is created before the final rename so every newly visible generation starts incomplete.
+        fs_err::write(
+            extracted.join(MANAGED_PYTHON_IN_PROGRESS_MARKER),
+            b"in-progress",
+        )?;
 
         // Remove the target if it already exists.
         if path.is_dir() {

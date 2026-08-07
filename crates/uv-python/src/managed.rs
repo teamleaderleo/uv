@@ -35,6 +35,16 @@ use crate::interpreter::Interpreter;
 use crate::python_version::PythonVersion;
 use crate::{PythonInstallationMinorVersionKey, PythonVariant, macos_dylib, sysconfig};
 
+pub(crate) const MANAGED_PYTHON_IN_PROGRESS_MARKER: &str = ".uv-installing";
+
+fn installation_is_in_progress(path: &Path) -> Result<bool, Error> {
+    match fs::symlink_metadata(path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER)) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(Error::ReadError(err)),
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
@@ -221,7 +231,7 @@ impl ManagedPythonInstallations {
             }
         };
         let scratch = self.scratch();
-        Ok(dirs
+        let dirs = dirs
             .into_iter()
             // Ignore the scratch directory
             .filter(|path| *path != scratch)
@@ -231,6 +241,25 @@ impl ManagedPythonInstallations {
                     .and_then(OsStr::to_str)
                     .is_none_or(|name| !name.starts_with('.'))
             })
+            // Published managed Pythons remain hidden until internal finalization succeeds.
+            // Any marker object means incomplete; unexpected marker metadata errors abort
+            // directory discovery rather than exposing a possibly incomplete installation.
+            .map(|path| {
+                if installation_is_in_progress(&path)? {
+                    debug!(
+                        "Skipping incomplete managed Python installation at `{}`",
+                        path.user_display()
+                    );
+                    Ok(None)
+                } else {
+                    Ok(Some(path))
+                }
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        Ok(dirs
+            .into_iter()
+            .flatten()
             .filter_map(|path| {
                 ManagedPythonInstallation::from_path(path)
                     .inspect_err(|err| {
@@ -377,8 +406,13 @@ impl ManagedPythonInstallation {
         // Verify it's a valid installation key
         PythonInstallationKey::from_str(name).ok()?;
 
-        // Construct the installation from the path within the managed root
+        // Construct the installation from the path within the managed root. Refuse
+        // marker-bearing (or unreadable) paths here too: this reconstruction path can be reached
+        // from an already-discovered interpreter without going through `find_all()`.
         let path = root.join(name);
+        if installation_is_in_progress(&path).ok()? {
+            return None;
+        }
         Self::from_path(path).ok()
     }
 
@@ -477,6 +511,16 @@ impl ManagedPythonInstallation {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Mark this published installation complete after all internal finalization succeeds.
+    pub fn mark_finalized(&self) -> Result<(), Error> {
+        let marker = self.path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER);
+        match fs::remove_file(marker) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub fn key(&self) -> &PythonInstallationKey {
@@ -1002,6 +1046,41 @@ mod tests {
             sha256: None,
             build: build.map(|s| Cow::Owned(s.to_owned())),
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn find_all_skips_in_progress_installations() {
+        let installations = ManagedPythonInstallations::temp().unwrap().init().unwrap();
+        let platform = Platform::from_str("linux-x86_64-gnu").unwrap();
+        let key = PythonInstallationKey::new(
+            LenientImplementationName::Known(ImplementationName::CPython),
+            3,
+            12,
+            6,
+            None,
+            platform,
+            PythonVariant::Default,
+        );
+        let path = installations.root().join(key.to_string());
+        fs::create_dir_all(&path).unwrap();
+        let marker = path.join(MANAGED_PYTHON_IN_PROGRESS_MARKER);
+
+        fs::write(&marker, b"in-progress").unwrap();
+        assert!(installation_is_in_progress(&path).unwrap());
+        assert_eq!(installations.find_all().unwrap().count(), 0);
+        fs::remove_file(&marker).unwrap();
+
+        // Presence, not file type, owns the incomplete state.
+        fs::create_dir(&marker).unwrap();
+        assert!(installation_is_in_progress(&path).unwrap());
+        assert_eq!(installations.find_all().unwrap().count(), 0);
+        fs::remove_dir(&marker).unwrap();
+
+        assert!(!installation_is_in_progress(&path).unwrap());
+        let found = installations.find_all().unwrap().collect::<Vec<_>>();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].key(), &key);
     }
 
     #[test]
