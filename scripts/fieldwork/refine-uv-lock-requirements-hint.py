@@ -5,9 +5,11 @@ from pathlib import Path
 
 # The carrier applies this refinement after fetching exact public uv base
 # b358fb6fce199fb1977913d310ddb6d573e44031 from astral-sh/uv.
-# Carrier fence v2 compares the immutable PR base and head SHAs directly.
+# The base workflow compares immutable PR base and head SHAs directly.
 # Rust 1.97.1 rustfmt and clippy are installed explicitly by the carrier.
-# Applied source is unstaged before the seven-file exact-diff fence.
+# The accepted pip-specific hint path is retained while the generic collector
+# is extended for command paths that render through the shared error chain.
+# Applied source is unstaged before the eight-file exact-diff fence.
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -17,18 +19,6 @@ def replace_once(path: Path, old: str, new: str) -> None:
         raise SystemExit(f"{path}: expected one replacement anchor, found {count}")
     path.write_text(content.replace(old, new, 1))
 
-
-operations = Path("crates/uv/src/commands/pip/operations.rs")
-replace_once(
-    operations,
-    """                    if let Some(lock_err) =
-                        cause.downcast_ref::<uv_requirements::UvLockfileAsRequirementsError>()
-                    {
-                        return uv_errors::Hint::hints(lock_err);
-                    }
-""",
-    "",
-)
 
 diagnostics = Path("crates/uv/src/commands/diagnostics.rs")
 anchor = "        collect_hint::<ExtrasWithoutSourceError>(cause, &mut hints);\n"
