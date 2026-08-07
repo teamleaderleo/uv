@@ -248,9 +248,7 @@ new_urls = '''        let mut regular: FxHashMap<PackageName, Vec<(VerbatimParse
             .map(|(name, urls)| {
                 (
                     name,
-                    urls.into_iter()
-                        .map(|(url, _root_context)| url)
-                        .collect(),
+                    urls.into_iter().map(|(url, _root_context)| url).collect(),
                 )
             })
             .collect::<FxHashMap<_, _>>();
