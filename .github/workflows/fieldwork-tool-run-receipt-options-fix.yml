@@ -1,0 +1,104 @@
+name: Fieldwork tool run receipt options fix
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/tool-run-receipt-options-fix-base
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_BASE: 544157b31dbc6007bfdfe2789d3d068278fdb57d
+      CANDIDATE_BRANCH: candidate/tool-run-receipt-options-fix
+    steps:
+      - name: Check out carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | sort > "$RUNNER_TEMP/carrier-files.txt"
+          printf '%s\n' scripts/fieldwork/generate-tool-run-receipt-options-fix.py > "$RUNNER_TEMP/expected-carrier-files.txt"
+          diff -u "$RUNNER_TEMP/expected-carrier-files.txt" "$RUNNER_TEMP/carrier-files.txt"
+          cp scripts/fieldwork/generate-tool-run-receipt-options-fix.py "$RUNNER_TEMP/generate.py"
+
+      - name: Generate exact-source candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$SOURCE_BASE"
+          python "$RUNNER_TEMP/generate.py"
+          rustup component add rustfmt clippy
+          cargo fmt --all
+          git diff --name-only | sort > "$RUNNER_TEMP/source-files.txt"
+          printf '%s\n' \
+            crates/uv-settings/src/settings.rs \
+            crates/uv/src/commands/tool/run.rs \
+            crates/uv/tests/tool/tool_run.rs \
+            | sort > "$RUNNER_TEMP/expected-source-files.txt"
+          diff -u "$RUNNER_TEMP/expected-source-files.txt" "$RUNNER_TEMP/source-files.txt"
+          git diff --check
+          cargo fmt --all --check
+          git diff > "$RUNNER_TEMP/source.patch"
+
+      - name: Compile affected crates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check --locked -p uv-settings -p uv
+
+      - name: Run focused behavior matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p uv --test tool --features test-python,test-pypi \
+            tool_run::tool_run_receipt_options_ -- --nocapture \
+            | tee "$RUNNER_TEMP/focused-tests.txt"
+
+      - name: Run affected Clippy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy --locked -p uv-settings --lib -- -D warnings
+          cargo clippy --locked -p uv --lib -- -D warnings
+
+      - name: Publish clean source candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add \
+            crates/uv-settings/src/settings.rs \
+            crates/uv/src/commands/tool/run.rs \
+            crates/uv/tests/tool/tool_run.rs
+          git -c user.name='Fieldwork validation' -c user.email='fieldwork@invalid' \
+            commit -m 'fix: inherit installed tool options in tool run'
+          git rev-parse HEAD | tee "$RUNNER_TEMP/candidate-sha.txt"
+          git rev-parse HEAD^{tree} | tee "$RUNNER_TEMP/candidate-tree.txt"
+          git diff --name-only "$SOURCE_BASE"..HEAD | sort | tee "$RUNNER_TEMP/candidate-files.txt"
+          test "$(git rev-list --count "$SOURCE_BASE"..HEAD)" -eq 1
+          git push origin "HEAD:refs/heads/$CANDIDATE_BRANCH" --force
+
+      - name: Retain validation receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tool-run-receipt-options-fix-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/carrier-files.txt
+            ${{ runner.temp }}/source-files.txt
+            ${{ runner.temp }}/source.patch
+            ${{ runner.temp }}/focused-tests.txt
+            ${{ runner.temp }}/candidate-sha.txt
+            ${{ runner.temp }}/candidate-tree.txt
+            ${{ runner.temp }}/candidate-files.txt
+          if-no-files-found: warn
+          retention-days: 14
