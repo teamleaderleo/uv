@@ -1,0 +1,111 @@
+name: Fieldwork UV URL selection trace
+
+on:
+  pull_request:
+    branches:
+      - research/validate-uv-dev-304-20260803
+    paths:
+      - .github/workflows/fieldwork-url-selection-trace.yml
+      - fieldwork/source-provenance-probe/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Apply exact draft and trace-only instrumentation
+        run: |
+          set -euo pipefail
+          mkdir -p fieldwork/source-provenance-probe/out-trace
+          git apply fieldwork/source-provenance-probe/uv-dev-304.diff
+          python3 fieldwork/source-provenance-probe/apply_uv_dev_304_build_fix.py
+          python3 fieldwork/source-provenance-probe/apply_manifest_lane_candidate.py
+          python3 fieldwork/source-provenance-probe/apply_url_selection_trace.py
+          git diff --check
+          git diff --name-only | sort > fieldwork/source-provenance-probe/out-trace/changed-files.txt
+          test "$(cat fieldwork/source-provenance-probe/out-trace/changed-files.txt)" = "$(printf '%s\n' \
+            crates/uv-resolver/src/lock/mod.rs \
+            crates/uv-resolver/src/manifest.rs \
+            crates/uv-resolver/src/resolver/urls.rs \
+            crates/uv/tests/lock/lock.rs)"
+          git diff --binary > fieldwork/source-provenance-probe/out-trace/applied.patch
+          {
+            echo 'public_draft_head=675839b0b1b1c66ee3b02139e1237094722ec2b2'
+            echo "carrier_head=$(git rev-parse HEAD)"
+            echo 'selection_policy=exact-draft-304'
+            echo 'instrumentation=manifest-lane-and-verbatim-url-trace'
+          } > fieldwork/source-provenance-probe/out-trace/identity.txt
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.12.1
+          enable-cache: false
+
+      - run: uv python install 3.12
+
+      - name: Check formatting and build
+        run: |
+          rustup component add rustfmt
+          cargo fmt --all --check
+          cargo build --bin uv
+
+      - name: Put traced uv first on PATH
+        run: |
+          mkdir -p "$RUNNER_TEMP/fieldwork-bin"
+          ln -s "$GITHUB_WORKSPACE/target/debug/uv" "$RUNNER_TEMP/fieldwork-bin/uv"
+          echo "$RUNNER_TEMP/fieldwork-bin" >> "$GITHUB_PATH"
+
+      - name: Trace forward regression matrix
+        env:
+          UV_VERSION: trace-exact-draft-304
+          UV_FIELDWORK_URL_TRACE: "1"
+        run: |
+          set -o pipefail
+          bash fieldwork/source-provenance-probe/run.sh 2>&1 | tee fieldwork/source-provenance-probe/out-trace/forward.log
+
+      - name: Trace reverse authority control without treating expected control failure as job failure
+        env:
+          UV_VERSION: trace-exact-draft-304
+          UV_FIELDWORK_URL_TRACE: "1"
+        run: |
+          set +e
+          set -o pipefail
+          bash fieldwork/source-provenance-probe/run-root-lookahead-control.sh 2>&1 | tee fieldwork/source-provenance-probe/out-trace/reverse.log
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "reverse_control_exit=$status" | tee -a fieldwork/source-provenance-probe/out-trace/identity.txt
+          test -s fieldwork/source-provenance-probe/out-root-lookahead/summary.md
+
+      - name: Extract trace lines
+        run: |
+          grep 'FIELDWORK_URL_TRACE' fieldwork/source-provenance-probe/out-trace/forward.log > fieldwork/source-provenance-probe/out-trace/forward-selection.txt
+          grep 'FIELDWORK_URL_TRACE' fieldwork/source-provenance-probe/out-trace/reverse.log > fieldwork/source-provenance-probe/out-trace/reverse-selection.txt
+          cat fieldwork/source-provenance-probe/out/summary.md > fieldwork/source-provenance-probe/out-trace/forward-summary.md
+          cat fieldwork/source-provenance-probe/out-root-lookahead/summary.md > fieldwork/source-provenance-probe/out-trace/reverse-summary.md
+          {
+            echo '## Forward selection trace'
+            echo '```text'
+            cat fieldwork/source-provenance-probe/out-trace/forward-selection.txt
+            echo '```'
+            echo
+            echo '## Reverse selection trace'
+            echo '```text'
+            cat fieldwork/source-provenance-probe/out-trace/reverse-selection.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload trace receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-url-selection-trace
+          path: fieldwork/source-provenance-probe/out-trace/
+          if-no-files-found: error
