@@ -1,0 +1,69 @@
+name: Fieldwork tool uninstall entrypoint residue
+
+on:
+  pull_request:
+    paths:
+      - "fieldwork/tool-uninstall-entrypoint-residue/**"
+      - ".github/workflows/fieldwork-tool-uninstall-entrypoint-residue.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CURRENT_SOURCE_HEAD: 544157b31dbc6007bfdfe2789d3d068278fdb57d
+    steps:
+      - name: Check out exact carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check out exact uv source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fieldwork/upstream-544157
+          path: uv-current
+          persist-credentials: false
+
+      - name: Apply exact residue probe
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git -C uv-current rev-parse HEAD)" = "$CURRENT_SOURCE_HEAD"
+          python3 -m py_compile fieldwork/tool-uninstall-entrypoint-residue/apply_probe.py
+          python3 fieldwork/tool-uninstall-entrypoint-residue/apply_probe.py uv-current
+          git -C uv-current diff --check
+          rustup component add rustfmt
+          (cd uv-current && cargo fmt --all)
+          (cd uv-current && cargo fmt --all -- --check)
+          test "$(git -C uv-current diff --name-only)" = "crates/uv/tests/tool/tool_uninstall.rs"
+          git -C uv-current diff --binary > tool-uninstall-entrypoint-residue.patch
+
+      - name: Execute residue characterization test
+        working-directory: uv-current
+        run: |
+          set -o pipefail
+          cargo test --locked -p uv --test tool \
+            tool_uninstall::tool_uninstall_all_missing_receipt_leaves_entrypoint_residue \
+            -- --exact --nocapture 2>&1 | tee residue-test-output.txt
+          grep -F "running 1 test" residue-test-output.txt
+          grep -F "test tool_uninstall::tool_uninstall_all_missing_receipt_leaves_entrypoint_residue ... ok" residue-test-output.txt
+
+      - name: Upload exact probe patch
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: fieldwork-tool-uninstall-entrypoint-residue
+          path: |
+            tool-uninstall-entrypoint-residue.patch
+            uv-current/residue-test-output.txt
+          if-no-files-found: warn
+          retention-days: 30
