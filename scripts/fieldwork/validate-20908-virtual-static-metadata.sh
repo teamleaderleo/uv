@@ -97,6 +97,30 @@ package = false
 EOF
 run_case virtual-valid 0
 
+# Compatibility control: virtual workspace roots can intentionally omit root package metadata.
+# Hardening the whole static-metadata soft-error arm must not turn a missing root `[project]` table
+# into an error when a valid workspace member supplies the actual package metadata.
+mkdir -p "$ROOT/virtual-workspace/member"
+cat > "$ROOT/virtual-workspace/pyproject.toml" <<'EOF'
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["member"]
+EOF
+cat > "$ROOT/virtual-workspace/member/pyproject.toml" <<'EOF'
+[project]
+name = "member"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+EOF
+run_case virtual-workspace 0
+if grep -qi 'FieldNotFound\|missing.*project\|project.*missing' <<<"$CASE_OUTPUT"; then
+  echo 'valid virtual workspace root surfaced missing package metadata as an error' >&2
+  exit 1
+fi
+
 # Negative control: an actual package (forced by an explicit build system) retains the existing
 # backend-fallback policy for the same invalid requirement. With builds disabled, that fallback
 # still terminates as a no-build error.
@@ -121,4 +145,4 @@ if ! grep -q 'Building source distributions' <<<"$CASE_OUTPUT"; then
   exit 1
 fi
 
-echo 'VALIDATED: virtual projects surface unavailable static metadata without changing ordinary package fallback' | tee -a "$TRANSCRIPT"
+echo 'VALIDATED: virtual projects surface unavailable static metadata while preserving valid virtual workspace and ordinary package behavior' | tee -a "$TRANSCRIPT"
