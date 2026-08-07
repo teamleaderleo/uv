@@ -1019,7 +1019,7 @@ async fn get_or_create_environment(
                     .get_tool_receipt(&requirement.name)
                     .ok()
                     .flatten()
-                    .is_some_and(|receipt| ToolOptions::from(options) == *receipt.options())
+                    .is_some_and(|receipt| receipt.options().satisfies(&ToolOptions::from(options)))
                 {
                     let ResolverInstallerSettings {
                         resolver:
