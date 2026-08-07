@@ -1,0 +1,92 @@
+name: Fieldwork tool run receipt options probe
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/tool-run-receipt-options-probe-base
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce-and-control:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_BASE: 544157b31dbc6007bfdfe2789d3d068278fdb57d
+    steps:
+      - name: Check out carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD | sort > "$RUNNER_TEMP/carrier-files.txt"
+          printf '%s\n' scripts/fieldwork/generate-tool-run-receipt-options-probe.py > "$RUNNER_TEMP/expected-carrier-files.txt"
+          diff -u "$RUNNER_TEMP/expected-carrier-files.txt" "$RUNNER_TEMP/carrier-files.txt"
+          cp scripts/fieldwork/generate-tool-run-receipt-options-probe.py "$RUNNER_TEMP/generate.py"
+
+      - name: Generate exact-source probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$SOURCE_BASE"
+          python "$RUNNER_TEMP/generate.py"
+          cargo fmt --all
+          git diff --name-only | sort > "$RUNNER_TEMP/source-files.txt"
+          printf '%s\n' crates/uv/tests/tool/tool_run.rs > "$RUNNER_TEMP/expected-source-files.txt"
+          diff -u "$RUNNER_TEMP/expected-source-files.txt" "$RUNNER_TEMP/source-files.txt"
+          git diff --check
+          cargo fmt --all --check
+          git diff > "$RUNNER_TEMP/source.patch"
+
+      - name: Reproduce unspecified-option mismatch
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          cargo test --locked -p uv --test tool --features test-python,test-pypi \
+            tool_run::tool_run_receipt_options_unspecified_should_reuse -- --nocapture \
+            >"$RUNNER_TEMP/reproduction.txt" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/reproduction.txt"
+          if [ "$status" -eq 0 ]; then
+            echo 'Expected current main to fail the desired unspecified-option reuse assertion.' >&2
+            exit 1
+          fi
+          grep -F 'expected installed tool reuse with unspecified run options' "$RUNNER_TEMP/reproduction.txt"
+
+      - name: Run compatibility controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p uv --test tool --features test-python,test-pypi \
+            tool_run::tool_run_receipt_options_same_explicit_reuses -- --nocapture \
+            | tee "$RUNNER_TEMP/same-explicit.txt"
+          cargo test --locked -p uv --test tool --features test-python,test-pypi \
+            tool_run::tool_run_receipt_options_conflicting_explicit_does_not_reuse -- --nocapture \
+            | tee "$RUNNER_TEMP/conflicting-explicit.txt"
+          cargo test --locked -p uv --test tool --features test-python,test-pypi \
+            tool_run::tool_run_receipt_options_same_list_value_reuses -- --nocapture \
+            | tee "$RUNNER_TEMP/same-list.txt"
+
+      - name: Retain probe receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tool-run-receipt-options-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/carrier-files.txt
+            ${{ runner.temp }}/source-files.txt
+            ${{ runner.temp }}/source.patch
+            ${{ runner.temp }}/reproduction.txt
+            ${{ runner.temp }}/same-explicit.txt
+            ${{ runner.temp }}/conflicting-explicit.txt
+            ${{ runner.temp }}/same-list.txt
+          if-no-files-found: warn
+          retention-days: 14
