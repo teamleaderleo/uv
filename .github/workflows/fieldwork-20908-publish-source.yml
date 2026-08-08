@@ -1,3 +1,4 @@
+# Internal publication carrier for the already-validated one-file source patch.
 name: Fieldwork 20908 publish clean source
 
 on:
