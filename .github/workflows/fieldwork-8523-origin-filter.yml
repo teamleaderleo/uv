@@ -1,0 +1,73 @@
+name: Fieldwork 8523 receipt origin filter
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/8523-origin-filter-base
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      SOURCE_BASE: 507230998c9541d67814b57463ac00e454ff6991
+    steps:
+      - name: Check out carrier
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier boundary
+        run: |
+          set -euo pipefail
+          base_ref="origin/${{ github.event.pull_request.base.ref }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          mapfile -t files < <(git diff --name-only "$base_ref...$head_sha" | sort)
+          expected=(
+            scripts/fieldwork/generate-8523-origin-filter.py
+            scripts/fieldwork/validate-8523-origin-filter.py
+          )
+          diff <(printf '%s\n' "${expected[@]}") <(printf '%s\n' "${files[@]}")
+          cp scripts/fieldwork/generate-8523-origin-filter.py "$RUNNER_TEMP/generate.py"
+          cp scripts/fieldwork/validate-8523-origin-filter.py "$RUNNER_TEMP/validate.py"
+
+      - name: Generate exact-source candidate
+        run: |
+          set -euo pipefail
+          git checkout --detach "$SOURCE_BASE"
+          python "$RUNNER_TEMP/generate.py"
+          rustup component add rustfmt clippy
+          cargo fmt --all
+          test "$(git diff --name-only)" = "crates/uv-settings/src/settings.rs"
+          git diff --check
+          cargo fmt --all --check
+          git diff > "$RUNNER_TEMP/source.patch"
+
+      - name: Compile and lint candidate
+        run: |
+          set -euo pipefail
+          cargo check --locked -p uv-settings -p uv
+          cargo clippy --locked -p uv-settings -p uv --lib -- -D warnings
+          cargo build --locked -p uv
+
+      - name: Run receipt-origin matrix
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/validate.py" \
+            --uv "$(pwd)/target/debug/uv" \
+            --root "$RUNNER_TEMP/uv-8523-fixed"
+
+      - name: Retain receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-8523-origin-filter-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/source.patch
+            ${{ runner.temp }}/uv-8523-fixed/transcript.txt
+          if-no-files-found: warn
+          retention-days: 14
