@@ -3430,6 +3430,17 @@ impl StaticMetadata {
                     | uv_pypi_types::MetadataError::FieldNotFound(_)
                     | uv_pypi_types::MetadataError::PoetrySyntax),
                 ) => {
+                    // Virtual projects (`tool.uv.package = false`) do not use a build backend, so
+                    // falling through to PEP 517 would only replace this useful project-metadata
+                    // error with a misleading build failure. Ordinary packages retain the existing
+                    // backend fallback behavior.
+                    if matches!(
+                        source,
+                        BuildableSource::Dist(SourceDist::Directory(dist))
+                            if dist.r#virtual.unwrap_or(false)
+                    ) {
+                        return Err(Error::PyprojectToml(err));
+                    }
                     debug!("No static `pyproject.toml` available for: {source} ({err:?})");
                 }
                 Err(err) => return Err(Error::PyprojectToml(err)),
