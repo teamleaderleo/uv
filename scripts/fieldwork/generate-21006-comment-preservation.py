@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-# Candidate is evaluated alongside the historical #16734 comment-placement controls.
+# Candidate is evaluated alongside the historical #16734 comment-placement invariants.
 path = Path("crates/uv-workspace/src/pyproject_mut.rs")
 text = path.read_text()
 
@@ -138,6 +138,46 @@ addition = anchor + '''
             "existing trailing-comma behavior should remain unchanged:\\n{serialized}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn reformat_preserves_trailing_comment_sequence() {
+        let mut doc: DocumentMut = r#"\n[project]\ndependencies = [\n    \"anyio==3.7.0\",\n    \"idna\",\n    \"iniconfig\",  # Use iniconfig.\n    # First line.\n    # Second line.\n]\n"#
+        .parse()
+        .unwrap();
+
+        reformat_array_multiline(
+            doc["project"]["dependencies"]
+                .as_array_mut()
+                .expect("dependencies array"),
+        );
+
+        let serialized = doc.to_string();
+        let expected = "\\\"iniconfig\\\",  # Use iniconfig.\\n    # First line.\\n    # Second line.";
+        assert!(
+            serialized.contains(expected),
+            "historical trailing comment sequence should remain attached and ordered:\\n{serialized}"
+        );
+    }
+
+    #[test]
+    fn reformat_preserves_trailing_comment_depth() {
+        let mut doc: DocumentMut = r#"\n[project]\ndependencies = [\n  \"anyio==3.7.0\",\n  \"idna\",\n  \"iniconfig\",# Use iniconfig.\n  # First line.\n  # Second line.\n]\n"#
+        .parse()
+        .unwrap();
+
+        reformat_array_multiline(
+            doc["project"]["dependencies"]
+                .as_array_mut()
+                .expect("dependencies array"),
+        );
+
+        let serialized = doc.to_string();
+        let expected = "  \\\"iniconfig\\\",# Use iniconfig.\\n  # First line.\\n  # Second line.";
+        assert!(
+            serialized.contains(expected),
+            "historical indentation depth and zero-padding comment should remain unchanged:\\n{serialized}"
+        );
     }
 '''
 if text.count(anchor) != 1:
