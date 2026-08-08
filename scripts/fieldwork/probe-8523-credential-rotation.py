@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import base64
-import contextlib
 import hashlib
 import http.server
 import os
@@ -89,15 +88,38 @@ def main():
         def log_message(self, fmt, *values):
             return
 
-        def do_GET(self):
+        def authorized(self):
             expected = "Basic " + base64.b64encode(f"aws:{state['token']}".encode()).decode()
             authorized = self.headers.get("Authorization") == expected
-            request_log.append((self.path, authorized, state["token"]))
+            request_log.append((self.command, self.path, authorized, state["token"]))
             if not authorized:
                 self.send_response(401)
                 self.send_header("WWW-Authenticate", 'Basic realm="fieldwork"')
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
+                return False
+            return True
+
+        def do_HEAD(self):
+            if not self.authorized():
+                return
+            if self.path.startswith("/packages/"):
+                filename = pathlib.Path(self.path).name
+                for version in state["versions"]:
+                    wheel = wheels[version]
+                    if wheel.name == filename:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/octet-stream")
+                        self.send_header("Content-Length", str(wheel.stat().st_size))
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        return
+            self.send_response(404)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
+        def do_GET(self):
+            if not self.authorized():
                 return
 
             if self.path.rstrip("/") == f"/simple/{PACKAGE}":
@@ -162,7 +184,7 @@ def main():
         with transcript_path.open("w", encoding="utf-8") as transcript:
             transcript.write(f"uv={args.uv}\nindex=http://127.0.0.1:{port}/simple\n")
             write_config(config, port, "old-token")
-            transcript.write("phase=install old-token version=0.1.0\n")
+            transcript.write("phase=install credential-generation=old version=0.1.0\n")
             install = run(
                 transcript,
                 env,
@@ -180,7 +202,7 @@ def main():
             receipt_before = receipt.read_text(encoding="utf-8")
             transcript.write("receipt_after_install_sha256=" + hashlib.sha256(receipt_before.encode()).hexdigest() + "\n")
             transcript.write(f"receipt_contains_endpoint={f'127.0.0.1:{port}' in receipt_before}\n")
-            transcript.write(f"receipt_contains_old_token={'old-token' in receipt_before}\n")
+            transcript.write(f"receipt_contains_credentials={'old-token' in receipt_before}\n")
             if f"127.0.0.1:{port}" not in receipt_before:
                 raise SystemExit("receipt did not persist configured index endpoint")
             if "old-token" in receipt_before:
@@ -195,11 +217,12 @@ def main():
             state["token"] = "new-token"
             state["versions"] = ["0.1.0", "0.2.0"]
             write_config(config, port, "new-token")
-            transcript.write("phase=upgrade new-token versions=0.1.0,0.2.0\n")
+            transcript.write("phase=upgrade credential-generation=new versions=0.1.0,0.2.0\n")
             upgrade = run(transcript, env, args.uv, "tool", "upgrade", PACKAGE)
 
-            for path, authorized, token_phase in request_log:
-                transcript.write(f"request path={path} authorized={authorized} expected_phase={token_phase}\n")
+            for method, path, authorized, token_phase in request_log:
+                phase = "new" if token_phase == "new-token" else "old"
+                transcript.write(f"request method={method} path={path} authorized={authorized} expected_generation={phase}\n")
             transcript.flush()
 
             if upgrade.returncode != 0:
@@ -213,7 +236,7 @@ def main():
 
             receipt_after = receipt.read_text(encoding="utf-8")
             transcript.write("receipt_after_upgrade_sha256=" + hashlib.sha256(receipt_after.encode()).hexdigest() + "\n")
-            transcript.write(f"receipt_contains_new_token={'new-token' in receipt_after}\n")
+            transcript.write(f"receipt_contains_rotated_credentials={'new-token' in receipt_after}\n")
             if "new-token" in receipt_after:
                 raise SystemExit("upgraded receipt unexpectedly persisted rotated credentials")
 
