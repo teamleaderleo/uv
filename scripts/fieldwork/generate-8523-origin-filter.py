@@ -10,7 +10,7 @@ impl From<ResolverInstallerOptions> for ToolOptions {
 '''
 replacement = '''}
 
-/// Return whether an index endpoint should be persisted in a tool receipt.
+/// Return whether a registry index endpoint should be persisted in a tool receipt.
 ///
 /// Tool receipts intentionally outlive filesystem configuration. Persist explicit/legacy inputs,
 /// but let user, system, and project configuration be rediscovered on later tool operations so
@@ -62,16 +62,9 @@ new_index = '''            index: value.indexes.index.and_then(|indexes| {
                 (!indexes.is_empty()).then_some(indexes)
             }),
             no_index: value.indexes.no_index,
-            find_links: value.indexes.find_links.and_then(|indexes| {
-                let indexes = indexes
-                    .into_iter()
-                    .filter(|index| {
-                        let index: Index = index.clone().into();
-                        tool_receipt_index_is_durable(index.origin)
-                    })
-                    .collect::<Vec<_>>();
-                (!indexes.is_empty()).then_some(indexes)
-            }),
+            // `find-links` does not currently carry filesystem-origin metadata, so leave its
+            // persistence semantics unchanged rather than guessing at provenance.
+            find_links: value.indexes.find_links,
 '''
 if text.count(old_index) != 1:
     raise SystemExit(f"unexpected ToolOptions index block count: {text.count(old_index)}")
