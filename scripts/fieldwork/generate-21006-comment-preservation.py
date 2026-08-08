@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# Candidate is evaluated alongside the historical #16734 comment-placement controls.
 path = Path("crates/uv-workspace/src/pyproject_mut.rs")
 text = path.read_text()
 
