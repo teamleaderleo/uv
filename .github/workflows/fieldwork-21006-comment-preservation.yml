@@ -1,0 +1,66 @@
+name: Fieldwork 21006 comment preservation
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/21006-comment-preservation-base
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SOURCE_BASE: 507230998c9541d67814b57463ac00e454ff6991
+    steps:
+      - name: Check out carrier
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify carrier boundary
+        run: |
+          set -euo pipefail
+          base_ref="origin/${{ github.event.pull_request.base.ref }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          mapfile -t files < <(git diff --name-only "$base_ref...$head_sha" | sort)
+          expected=(scripts/fieldwork/generate-21006-comment-preservation.py)
+          diff <(printf '%s\n' "${expected[@]}") <(printf '%s\n' "${files[@]}")
+          cp scripts/fieldwork/generate-21006-comment-preservation.py "$RUNNER_TEMP/generate.py"
+
+      - name: Generate exact-source candidate
+        run: |
+          set -euo pipefail
+          git checkout --detach "$SOURCE_BASE"
+          python "$RUNNER_TEMP/generate.py"
+          rustup component add rustfmt clippy
+          cargo fmt --all
+          test "$(git diff --name-only)" = "crates/uv-workspace/src/pyproject_mut.rs"
+          git diff --check
+          cargo fmt --all --check
+          git diff > "$RUNNER_TEMP/source.patch"
+
+      - name: Run focused tests
+        run: |
+          set -euo pipefail
+          cargo test --locked -p uv-workspace pyproject_mut::test::add_optional_dependency_preserves_inline_comment_without_trailing_comma -- --exact
+          cargo test --locked -p uv-workspace pyproject_mut::test::add_optional_dependency_preserves_inline_comment_with_trailing_comma -- --exact
+          cargo test --locked -p uv-workspace pyproject_mut::test::reformat_preserves_inline_comment
+
+      - name: Compile and lint affected crate
+        run: |
+          set -euo pipefail
+          cargo check --locked -p uv-workspace
+          cargo clippy --locked -p uv-workspace --all-targets -- -D warnings
+
+      - name: Retain source patch
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comment-preservation-21006-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/source.patch
+          if-no-files-found: warn
+          retention-days: 14
