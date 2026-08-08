@@ -42,6 +42,7 @@ function Paths() {
         ToolExe = Join-Path $env:UV_TOOL_DIR 'ruff\Scripts\ruff.exe'
         PythonExe = Join-Path $env:UV_TOOL_DIR 'ruff\Scripts\python.exe'
         Receipt = Join-Path $env:UV_TOOL_DIR 'ruff\uv-receipt.toml'
+        Lock = Join-Path $env:UV_TOOL_DIR 'ruff\uv.lock'
         Marker = Join-Path $env:UV_TOOL_DIR 'ruff\.uv-entrypoints-incomplete'
     }
 }
@@ -54,7 +55,7 @@ function Move-ReceiptTarget([string]$Receipt) {
     Set-Content -NoNewline -Encoding utf8 $Receipt $updatedReceipt
 }
 
-function Cause-Locked-PublicationFailure($Paths) {
+function Cause-Locked-PublicationFailure($Paths, [string[]]$GlobalArgs = @()) {
     $lock = [System.IO.File]::Open(
         $Paths.PublicExe,
         [System.IO.FileMode]::Open,
@@ -62,7 +63,7 @@ function Cause-Locked-PublicationFailure($Paths) {
         [System.IO.FileShare]::None
     )
     try {
-        $first = Invoke-Uv @('tool', 'upgrade', 'ruff')
+        $first = Invoke-Uv ($GlobalArgs + @('tool', 'upgrade', 'ruff'))
         if ($first.Code -eq 0) { throw 'expected upgrade to fail while public executable is locked' }
         if ($first.Output -notmatch 'Failed to install entrypoint|failed to copy file') {
             throw "upgrade failed for unexpected reason: $($first.Output)"
@@ -134,4 +135,84 @@ if ($publicAfter -notmatch '0\.9\.2') { throw 'dependency-upgrade path did not r
 if ($clickAfter -notmatch '^8\.1\.8') { throw "dependency-upgrade path did not upgrade click to 8.1.8: $clickAfter" }
 Record 'dependency-upgrade-and-recovery=true'
 
-Record 'VALIDATED: recovery is orthogonal to NoOp and UpgradeDependencies outcomes'
+# Scenario 3: the same late-publication failure must recover while tool-install locks are enabled,
+# and the recovered metadata generation must contain the upgraded root version.
+$scenario = Set-Scenario 'tool-lock'
+$previewArgs = @('--preview-features', 'tool-install-locks')
+$install = Invoke-Uv ($previewArgs + @('tool', 'install', 'ruff==0.9.1'))
+if ($install.Code -ne 0) { throw 'tool-lock scenario install failed' }
+$p = Paths
+if (-not (Test-Path $p.Lock)) { throw 'tool-lock install did not create uv.lock' }
+Move-ReceiptTarget $p.Receipt
+Cause-Locked-PublicationFailure $p $previewArgs
+$repairWithLock = Invoke-Uv ($previewArgs + @('tool', 'upgrade', 'ruff'))
+if ($repairWithLock.Code -ne 0) { throw 'tool-lock recovery failed' }
+if ($repairWithLock.Output -notmatch 'Repaired tool entrypoints') { throw 'tool-lock recovery did not report repair' }
+if ($repairWithLock.Output -match 'Nothing to upgrade') { throw 'tool-lock recovery incorrectly reported Nothing to upgrade' }
+if (Test-Path $p.Marker) { throw 'marker remained after tool-lock recovery' }
+if ((& $p.PublicExe --version 2>&1 | Out-String) -notmatch '0\.9\.2') { throw 'tool-lock recovery did not publish Ruff 0.9.2' }
+$lockText = Get-Content -Raw $p.Lock
+if ($lockText -notmatch 'version = "0\.9\.2"') { throw 'tool lock did not record Ruff 0.9.2 after recovery' }
+Record 'tool-lock-recovery=true'
+
+# Scenario 4: a failure after one of two public entrypoints was already replaced must leave the
+# marker authoritative for the whole entrypoint set. Corrupt the second path after releasing the
+# sharing-denied handle, then require recovery to restore both public files from the current tool
+# environment.
+$scenario = Set-Scenario 'multi-entrypoint'
+$install = Invoke-Uv @('tool', 'install', 'black==24.2.0')
+if ($install.Code -ne 0) { throw 'multi-entrypoint scenario install failed' }
+$blackDir = Join-Path $env:UV_TOOL_DIR 'black'
+$blackReceipt = Join-Path $blackDir 'uv-receipt.toml'
+$blackMarker = Join-Path $blackDir '.uv-entrypoints-incomplete'
+$publicBlack = Join-Path $env:UV_TOOL_BIN_DIR 'black.exe'
+$publicBlackd = Join-Path $env:UV_TOOL_BIN_DIR 'blackd.exe'
+$toolBlack = Join-Path $blackDir 'Scripts\black.exe'
+$toolBlackd = Join-Path $blackDir 'Scripts\blackd.exe'
+$receiptText = Get-Content -Raw $blackReceipt
+$updatedReceipt = $receiptText.Replace('==24.2.0', '==24.3.0')
+if ($updatedReceipt -eq $receiptText) { throw 'black receipt did not contain expected ==24.2.0 requirement' }
+if (($updatedReceipt.Split('==24.3.0').Count - 1) -ne 1) { throw 'black receipt version replacement was not unique' }
+Set-Content -NoNewline -Encoding utf8 $blackReceipt $updatedReceipt
+
+$blackdLock = [System.IO.File]::Open(
+    $publicBlackd,
+    [System.IO.FileMode]::Open,
+    [System.IO.FileAccess]::Read,
+    [System.IO.FileShare]::None
+)
+try {
+    $first = Invoke-Uv @('tool', 'upgrade', 'black')
+    if ($first.Code -eq 0) { throw 'expected multi-entrypoint upgrade to fail while blackd is locked' }
+    if ($first.Output -notmatch 'Failed to install entrypoint|failed to copy file') {
+        throw "multi-entrypoint upgrade failed for unexpected reason: $($first.Output)"
+    }
+    if (-not (Test-Path $blackMarker)) { throw 'multi-entrypoint failure did not leave recovery marker' }
+}
+finally {
+    $blackdLock.Dispose()
+}
+
+$environmentBlackVersion = (& $toolBlack --version 2>&1 | Out-String).Trim()
+Record "black-environment-after-failure=$environmentBlackVersion"
+if ($environmentBlackVersion -notmatch '24\.3\.0') { throw 'black environment was not upgraded to 24.3.0' }
+if (-not (Test-Path $publicBlack)) { throw 'first public Black entrypoint disappeared after partial publication' }
+if (-not (Test-Path $publicBlackd)) { throw 'locked Blackd entrypoint disappeared unexpectedly' }
+[System.IO.File]::WriteAllBytes($publicBlackd, [System.Text.Encoding]::ASCII.GetBytes('FIELDWORK-STALE'))
+$staleHash = (Get-FileHash -Algorithm SHA256 $publicBlackd).Hash
+
+$multiRepair = Invoke-Uv @('tool', 'upgrade', 'black')
+if ($multiRepair.Code -ne 0) { throw 'multi-entrypoint recovery failed' }
+if ($multiRepair.Output -notmatch 'Repaired tool entrypoints') { throw 'multi-entrypoint recovery did not report repair' }
+if ($multiRepair.Output -match 'Nothing to upgrade') { throw 'multi-entrypoint recovery incorrectly reported Nothing to upgrade' }
+if (Test-Path $blackMarker) { throw 'marker remained after multi-entrypoint recovery' }
+$publicBlackHash = (Get-FileHash -Algorithm SHA256 $publicBlack).Hash
+$publicBlackdHash = (Get-FileHash -Algorithm SHA256 $publicBlackd).Hash
+$toolBlackHash = (Get-FileHash -Algorithm SHA256 $toolBlack).Hash
+$toolBlackdHash = (Get-FileHash -Algorithm SHA256 $toolBlackd).Hash
+if ($publicBlackHash -ne $toolBlackHash) { throw 'recovery did not restore black.exe from current environment' }
+if ($publicBlackdHash -eq $staleHash) { throw 'recovery left the deliberately stale blackd.exe in place' }
+if ($publicBlackdHash -ne $toolBlackdHash) { throw 'recovery did not restore blackd.exe from current environment' }
+Record 'multi-entrypoint-recovery=true'
+
+Record 'VALIDATED: recovery covers NoOp, UpgradeDependencies, tool locks, and partial multi-entrypoint publication'
