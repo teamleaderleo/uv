@@ -1915,11 +1915,27 @@ fn reformat_array_multiline(deps: &mut Array) {
 
     let indentation_prefix_str = format!("\n{}", indentation_prefix.as_deref().unwrap_or("    "));
 
-    for item in deps.iter_mut() {
+    let last_index = deps.len().checked_sub(1);
+    let mut last_suffix_comments = Vec::new();
+
+    for (index, item) in deps.iter_mut().enumerate() {
         let decor = item.decor_mut();
         let mut prefix = String::new();
+        let mut comments = find_comments(decor.prefix()).collect::<Vec<_>>();
+        let suffix_comments = find_comments(decor.suffix()).collect::<Vec<_>>();
 
-        for comment in find_comments(decor.prefix()).chain(find_comments(decor.suffix())) {
+        // Without a trailing comma, toml_edit stores an end-of-line comment on the final array
+        // value in that value's suffix. Once we add the trailing comma below, the comment belongs
+        // in the array trailing decoration (after the comma), not in the value's prefix (before the
+        // value). Moving the final suffix as a unit also preserves any own-line comments that follow
+        // the final value.
+        if Some(index) == last_index {
+            last_suffix_comments.extend(suffix_comments);
+        } else {
+            comments.extend(suffix_comments);
+        }
+
+        for comment in comments {
             match &comment.kind {
                 CommentType::OwnLine => {
                     prefix.push_str(&indentation_prefix_str);
@@ -1936,7 +1952,10 @@ fn reformat_array_multiline(deps: &mut Array) {
     }
 
     deps.set_trailing(&{
-        let mut comments = find_comments(Some(deps.trailing())).peekable();
+        let mut comments = last_suffix_comments
+            .into_iter()
+            .chain(find_comments(Some(deps.trailing())))
+            .peekable();
         let mut rv = String::new();
         if comments.peek().is_some() {
             for comment in comments {
@@ -2062,6 +2081,128 @@ dependencies = [
         assert!(
             serialized.contains("\"attrs>=25.4.0\",#comment"),
             "inline comment spacing without padding should be preserved:\n{serialized}"
+        );
+    }
+
+    #[test]
+    fn add_optional_dependency_preserves_inline_comment_without_trailing_comma() -> Result<()> {
+        let toml = r#"
+[project]
+name = "grumblemuffins"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+typing = [
+    "pandas-stubs>=2.0.2",
+    "narwhals>=1.42.0" # narwhals are toothed whales native to the Arctic
+]
+"#;
+        let mut pyproject = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        let group = ExtraName::from_str("typing")?;
+        let requirement = Requirement::from_str("narwhals>=1.42")?;
+
+        pyproject.add_optional_dependency(&group, &requirement, None, false)?;
+        let serialized = pyproject.to_string();
+
+        assert!(
+            serialized
+                .contains("\"narwhals>=1.42\", # narwhals are toothed whales native to the Arctic"),
+            "inline comment should remain on the updated final dependency:\n{serialized}"
+        );
+        assert!(
+            !serialized.contains(
+                "\"pandas-stubs>=2.0.2\", # narwhals are toothed whales native to the Arctic"
+            ),
+            "inline comment must not move to the preceding dependency:\n{serialized}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn add_optional_dependency_preserves_inline_comment_with_trailing_comma() -> Result<()> {
+        let toml = r#"
+[project]
+name = "grumblemuffins"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+typing = [
+    "pandas-stubs>=2.0.2",
+    "narwhals>=1.42.0", # narwhals are toothed whales native to the Arctic
+]
+"#;
+        let mut pyproject = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        let group = ExtraName::from_str("typing")?;
+        let requirement = Requirement::from_str("narwhals>=1.42")?;
+
+        pyproject.add_optional_dependency(&group, &requirement, None, false)?;
+        let serialized = pyproject.to_string();
+
+        assert!(
+            serialized
+                .contains("\"narwhals>=1.42\", # narwhals are toothed whales native to the Arctic"),
+            "existing trailing-comma behavior should remain unchanged:\n{serialized}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reformat_preserves_trailing_comment_sequence() {
+        let mut doc: DocumentMut = r#"
+[project]
+dependencies = [
+    "anyio==3.7.0",
+    "idna",
+    "iniconfig",  # Use iniconfig.
+    # First line.
+    # Second line.
+]
+"#
+        .parse()
+        .unwrap();
+
+        reformat_array_multiline(
+            doc["project"]["dependencies"]
+                .as_array_mut()
+                .expect("dependencies array"),
+        );
+
+        let serialized = doc.to_string();
+        let expected = "\"iniconfig\",  # Use iniconfig.\n    # First line.\n    # Second line.";
+        assert!(
+            serialized.contains(expected),
+            "historical trailing comment sequence should remain attached and ordered:\n{serialized}"
+        );
+    }
+
+    #[test]
+    fn reformat_preserves_trailing_comment_depth() {
+        let mut doc: DocumentMut = r#"
+[project]
+dependencies = [
+  "anyio==3.7.0",
+  "idna",
+  "iniconfig",# Use iniconfig.
+  # First line.
+  # Second line.
+]
+"#
+        .parse()
+        .unwrap();
+
+        reformat_array_multiline(
+            doc["project"]["dependencies"]
+                .as_array_mut()
+                .expect("dependencies array"),
+        );
+
+        let serialized = doc.to_string();
+        let expected = "  \"iniconfig\",# Use iniconfig.\n  # First line.\n  # Second line.";
+        assert!(
+            serialized.contains(expected),
+            "historical indentation depth and zero-padding comment should remain unchanged:\n{serialized}"
         );
     }
 
