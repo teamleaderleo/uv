@@ -32,7 +32,7 @@ jobs:
             scripts/fieldwork/validate-8523-origin-filter.py
             scripts/fieldwork/validate-8523-origin-filter-v2.py
           )
-          diff <(printf '%s\n' "${expected[@]}") <(printf '%s\n' "${files[@]}")
+          diff <(printf '%s\n' "${expected[@]}" | sort) <(printf '%s\n' "${files[@]}" | sort)
           cp scripts/fieldwork/generate-8523-origin-filter.py "$RUNNER_TEMP/generate.py"
           cp scripts/fieldwork/validate-8523-origin-filter.py "$RUNNER_TEMP/validate_base.py"
           cp scripts/fieldwork/validate-8523-origin-filter-v2.py "$RUNNER_TEMP/validate.py"
