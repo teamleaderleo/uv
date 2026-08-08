@@ -1,0 +1,69 @@
+# Internal publication carrier for the already-validated one-file source patch.
+name: Fieldwork 20908 publish clean source
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fieldwork/20908-virtual-static-metadata-validation
+    paths:
+      - .github/workflows/fieldwork-20908-publish-source.yml
+      - scripts/fieldwork/20908-source.patch
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out carrier evidence
+        uses: actions/checkout@v5
+        with:
+          path: carrier
+          persist-credentials: false
+
+      - name: Check out exact public source
+        uses: actions/checkout@v5
+        with:
+          ref: 507230998c9541d67814b57463ac00e454ff6991
+          fetch-depth: 0
+          path: source
+          persist-credentials: true
+
+      - name: Apply exact retained patch and fence source
+        working-directory: source
+        run: |
+          set -euo pipefail
+          git apply --check ../carrier/scripts/fieldwork/20908-source.patch
+          git apply ../carrier/scripts/fieldwork/20908-source.patch
+          git diff --check
+          test "$(git diff --name-only)" = "crates/uv-distribution/src/source/mod.rs"
+          rustup component add rustfmt
+          cargo fmt --all --check
+          cargo check -p uv-distribution --locked
+          cargo clippy -p uv-distribution --locked -- -D warnings
+
+      - name: Publish one-file owned source branch
+        working-directory: source
+        run: |
+          set -euo pipefail
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          git switch -C candidate/20908-virtual-static-metadata
+          git add crates/uv-distribution/src/source/mod.rs
+          git commit -m 'Preserve virtual project static metadata errors'
+          git diff --exit-code 507230998c9541d67814b57463ac00e454ff6991..HEAD -- . ':!crates/uv-distribution/src/source/mod.rs'
+          git push origin HEAD:refs/heads/candidate/20908-virtual-static-metadata --force
+          {
+            echo "source_head=$(git rev-parse HEAD)"
+            echo "base=507230998c9541d67814b57463ac00e454ff6991"
+            echo "source_blob=$(git rev-parse HEAD:crates/uv-distribution/src/source/mod.rs)"
+          } > ../carrier/source-publication-receipt.txt
+
+      - name: Upload publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: 20908-source-publication
+          path: carrier/source-publication-receipt.txt
+          if-no-files-found: error
