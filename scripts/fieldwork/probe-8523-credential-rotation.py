@@ -12,6 +12,12 @@ import zipfile
 
 PACKAGE = "fieldwork-demo-tool"
 MODULE = "fieldwork_demo_tool"
+OLD_TOKEN = "old-token"
+NEW_TOKEN = "new-token"
+
+
+def basic_header(token: str) -> str:
+    return "Basic " + base64.b64encode(f"aws:{token}".encode()).decode()
 
 
 def build_wheel(root: pathlib.Path, version: str) -> pathlib.Path:
@@ -81,17 +87,32 @@ def main():
         "0.1.0": build_wheel(package_dir, "0.1.0"),
         "0.2.0": build_wheel(package_dir, "0.2.0"),
     }
-    state = {"token": "old-token", "versions": ["0.1.0"]}
+    state = {"token": OLD_TOKEN, "versions": ["0.1.0"]}
     request_log = []
+    old_header = basic_header(OLD_TOKEN)
+    new_header = basic_header(NEW_TOKEN)
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, fmt, *values):
             return
 
         def authorized(self):
-            expected = "Basic " + base64.b64encode(f"aws:{state['token']}".encode()).decode()
-            authorized = self.headers.get("Authorization") == expected
-            request_log.append((self.command, self.path, authorized, state["token"]))
+            header = self.headers.get("Authorization")
+            if header == old_header:
+                presented = "old"
+            elif header == new_header:
+                presented = "new"
+            elif header is None:
+                presented = "missing"
+            else:
+                presented = "other"
+
+            expected_generation = "new" if state["token"] == NEW_TOKEN else "old"
+            expected = new_header if expected_generation == "new" else old_header
+            authorized = header == expected
+            request_log.append(
+                (self.command, self.path, authorized, expected_generation, presented)
+            )
             if not authorized:
                 self.send_response(401)
                 self.send_header("WWW-Authenticate", 'Basic realm="fieldwork"')
@@ -183,7 +204,7 @@ def main():
     try:
         with transcript_path.open("w", encoding="utf-8") as transcript:
             transcript.write(f"uv={args.uv}\nindex=http://127.0.0.1:{port}/simple\n")
-            write_config(config, port, "old-token")
+            write_config(config, port, OLD_TOKEN)
             transcript.write("phase=install credential-generation=old version=0.1.0\n")
             install = run(
                 transcript,
@@ -202,10 +223,10 @@ def main():
             receipt_before = receipt.read_text(encoding="utf-8")
             transcript.write("receipt_after_install_sha256=" + hashlib.sha256(receipt_before.encode()).hexdigest() + "\n")
             transcript.write(f"receipt_contains_endpoint={f'127.0.0.1:{port}' in receipt_before}\n")
-            transcript.write(f"receipt_contains_credentials={'old-token' in receipt_before}\n")
+            transcript.write(f"receipt_contains_credentials={OLD_TOKEN in receipt_before}\n")
             if f"127.0.0.1:{port}" not in receipt_before:
                 raise SystemExit("receipt did not persist configured index endpoint")
-            if "old-token" in receipt_before:
+            if OLD_TOKEN in receipt_before:
                 raise SystemExit("receipt unexpectedly persisted short-lived credentials")
 
             public = bin_dir / PACKAGE
@@ -214,30 +235,33 @@ def main():
             if first.returncode != 0 or "0.1.0" not in first.stdout:
                 raise SystemExit("installed public tool is not version 0.1.0")
 
-            state["token"] = "new-token"
+            state["token"] = NEW_TOKEN
             state["versions"] = ["0.1.0", "0.2.0"]
-            write_config(config, port, "new-token")
+            write_config(config, port, NEW_TOKEN)
             transcript.write("phase=upgrade credential-generation=new versions=0.1.0,0.2.0\n")
             upgrade = run(transcript, env, args.uv, "tool", "upgrade", PACKAGE)
 
-            for method, path, authorized, token_phase in request_log:
-                phase = "new" if token_phase == "new-token" else "old"
-                transcript.write(f"request method={method} path={path} authorized={authorized} expected_generation={phase}\n")
+            for method, path, authorized, expected_generation, presented in request_log:
+                transcript.write(
+                    f"request method={method} path={path} authorized={authorized} "
+                    f"expected_generation={expected_generation} presented_generation={presented}\n"
+                )
             transcript.flush()
-
-            if upgrade.returncode != 0:
-                transcript.write("RESULT=REPRODUCED: current uv failed after user-config credential rotation\n")
-                raise SystemExit(2)
 
             second = subprocess.run([str(public)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             transcript.write(f"public_after_upgrade={second.stdout.strip()}\n")
-            if second.returncode != 0 or "0.2.0" not in second.stdout:
-                raise SystemExit("upgrade succeeded but public tool did not reach version 0.2.0")
+
+            if upgrade.returncode != 0 or second.returncode != 0 or "0.2.0" not in second.stdout:
+                transcript.write(
+                    "RESULT=REPRODUCED: current uv did not follow rotated user-config credentials to the newer tool version\n"
+                )
+                transcript.flush()
+                raise SystemExit(2)
 
             receipt_after = receipt.read_text(encoding="utf-8")
             transcript.write("receipt_after_upgrade_sha256=" + hashlib.sha256(receipt_after.encode()).hexdigest() + "\n")
-            transcript.write(f"receipt_contains_rotated_credentials={'new-token' in receipt_after}\n")
-            if "new-token" in receipt_after:
+            transcript.write(f"receipt_contains_rotated_credentials={NEW_TOKEN in receipt_after}\n")
+            if NEW_TOKEN in receipt_after:
                 raise SystemExit("upgraded receipt unexpectedly persisted rotated credentials")
 
             transcript.write("RESULT=NEGATIVE: current uv successfully followed rotated user-config credentials\n")
