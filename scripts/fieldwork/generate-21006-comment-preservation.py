@@ -2,6 +2,7 @@
 from pathlib import Path
 
 # Candidate is evaluated alongside the historical #16734 comment-placement invariants.
+# This no-op note intentionally retriggers the focused carrier after the base workflow was updated.
 path = Path("crates/uv-workspace/src/pyproject_mut.rs")
 text = path.read_text()
 
