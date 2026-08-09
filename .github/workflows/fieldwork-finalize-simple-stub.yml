@@ -28,8 +28,17 @@ jobs:
           fi
 
           curl -fsSL \
-            https://raw.githubusercontent.com/teamleaderleo/linux-fieldwork/ae33e82c00ebd6f21dc3b80d55d93bd703ef2a36/investigations/uv-stubs-backend-scope/product/uv_candidate_final_refine.py \
-            -o "$RUNNER_TEMP/uv_candidate_final_refine.py"
+            'https://api.github.com/repos/teamleaderleo/linux-fieldwork/contents/investigations/uv-stubs-backend-scope/product/uv_candidate_final_refine.py?ref=research%2F487-uv-simple-stub-candidate' \
+            -o "$RUNNER_TEMP/final_refine.json"
+          python - "$RUNNER_TEMP/final_refine.json" "$RUNNER_TEMP/uv_candidate_final_refine.py" <<'PY'
+          import base64
+          import json
+          import pathlib
+          import sys
+
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          pathlib.Path(sys.argv[2]).write_bytes(base64.b64decode(payload['content']))
+          PY
 
           python "$RUNNER_TEMP/uv_candidate_final_refine.py" "$target"
           rustup component add --toolchain 1.97.1-x86_64-unknown-linux-gnu rustfmt
