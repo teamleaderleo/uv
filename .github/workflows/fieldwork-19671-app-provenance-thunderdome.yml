@@ -1,0 +1,258 @@
+name: Fieldwork 19671 app provenance thunderdome
+
+on:
+  pull_request:
+    branches:
+      - automation/19671-app-provenance-thunderdome-base-20260809
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    env:
+      BASE_SHA: 1993c1e81ec8446d2db76308c4d516fdf23d5162
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned toolchain formatter
+        run: rustup component add rustfmt
+
+      - name: Materialize and validate both provenance factorizations
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          build_variant() {
+            mode="$1"
+            branch="$2"
+
+            git checkout --detach "$BASE_SHA"
+            git reset --hard "$BASE_SHA"
+            git clean -fdx
+
+            MODE="$mode" python - <<'PY'
+          import os
+          from pathlib import Path
+
+          mode = os.environ["MODE"]
+          lib_path = Path("crates/uv/src/lib.rs")
+          settings_path = Path("crates/uv/src/settings.rs")
+          init_path = Path("crates/uv/src/commands/project/init.rs")
+          test_path = Path("crates/uv/tests/project/init.rs")
+
+          lib = lib_path.read_text()
+          settings = settings_path.read_text()
+          init = init_path.read_text()
+          tests = test_path.read_text()
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          # Carry explicit application intent into project generation without widening InitProjectKind.
+          old = '''    name: Option<PackageName>,\n    init_kind: InitKind,\n    bare: bool,\n'''
+          new = '''    name: Option<PackageName>,\n    init_kind: InitKind,\n    explicit_app: bool,\n    bare: bool,\n'''
+          init = replace_once(init, old, new, "init signature")
+
+          old = '''                &name,\n                project_kind,\n                bare,\n'''
+          new = '''                &name,\n                project_kind,\n                explicit_app,\n                bare,\n'''
+          init = replace_once(init, old, new, "init_project call")
+
+          old = '''    name: &PackageName,\n    project_kind: InitProjectKind,\n    bare: bool,\n'''
+          new = '''    name: &PackageName,\n    project_kind: InitProjectKind,\n    explicit_app: bool,\n    bare: bool,\n'''
+          init = replace_once(init, old, new, "init_project signature")
+
+          old = '''        name,\n        path,\n        &requires_python,\n'''
+          new = '''        name,\n        path,\n        &requires_python,\n        explicit_app,\n'''
+          init = replace_once(init, old, new, "project kind call")
+
+          old = '''        requires_python: &RequiresPython,\n        description: Option<&str>,\n'''
+          new = '''        requires_python: &RequiresPython,\n        explicit_app: bool,\n        description: Option<&str>,\n'''
+          init = replace_once(init, old, new, "project kind signature")
+
+          old = '''        let simple_stub = matches!(self, Self::ApplicationWithLibrary | Self::Library)\n            && simple_stub_package_module_dir(name).is_some();\n'''
+          new = '''        let simple_stub = !explicit_app\n            && matches!(self, Self::ApplicationWithLibrary | Self::Library)\n            && simple_stub_package_module_dir(name).is_some();\n'''
+          init = replace_once(init, old, new, "stub inference precedence")
+
+          if mode == "local":
+              old = '''        ProjectCommand::Init(args) => {\n            // Resolve the settings from the command-line arguments and workspace configuration.\n            let args = settings::InitSettings::resolve(args, filesystem, environment)?;\n'''
+              new = '''        ProjectCommand::Init(args) => {\n            // Preserve explicit application intent before settings resolution collapses it into\n            // the packaged-application project kind.\n            let explicit_app = args.app;\n\n            // Resolve the settings from the command-line arguments and workspace configuration.\n            let args = settings::InitSettings::resolve(args, filesystem, environment)?;\n'''
+              lib = replace_once(lib, old, new, "local app capture")
+
+              old = '''                args.name,\n                args.kind,\n                args.bare,\n'''
+              new = '''                args.name,\n                args.kind,\n                explicit_app,\n                args.bare,\n'''
+              lib = replace_once(lib, old, new, "local dispatch")
+
+          elif mode == "settings":
+              old = '''    pub(crate) kind: InitKind,\n    pub(crate) bare: bool,\n'''
+              new = '''    pub(crate) kind: InitKind,\n    pub(crate) explicit_app: bool,\n    pub(crate) bare: bool,\n'''
+              settings = replace_once(settings, old, new, "settings field")
+
+              old = '''            name,\n            kind,\n            bare,\n'''
+              new = '''            name,\n            kind,\n            explicit_app: app,\n            bare,\n'''
+              settings = replace_once(settings, old, new, "settings assignment")
+
+              old = '''                args.name,\n                args.kind,\n                args.bare,\n'''
+              new = '''                args.name,\n                args.kind,\n                args.explicit_app,\n                args.bare,\n'''
+              lib = replace_once(lib, old, new, "settings dispatch")
+          else:
+              raise SystemExit(f"unknown mode: {mode}")
+
+          test_block = r'''#[test]
+          fn init_package_stubs_explicit_app_precedence() -> Result<()> {
+              let context = uv_test::test_context!("3.12");
+
+              // No explicit application request: the conventional -stubs name still selects the
+              // simple stub scaffold.
+              for (dir, args) in [
+                  ("stub-default", vec!["--name", "foo-stubs"]),
+                  ("stub-package", vec!["--name", "foo-stubs", "--package"]),
+                  ("stub-lib", vec!["--name", "foo-stubs", "--lib"]),
+              ] {
+                  let mut command = context.init();
+                  command.arg(dir);
+                  for arg in args {
+                      command.arg(arg);
+                  }
+                  let output = command.output()?;
+                  assert!(
+                      output.status.success(),
+                      "{dir}: {}",
+                      String::from_utf8_lossy(&output.stderr)
+                  );
+                  let child = context.temp_dir.child(dir);
+                  child
+                      .child("src/foo-stubs/__init__.pyi")
+                      .assert(predicate::path::is_file());
+                  child
+                      .child("src/foo_stubs/__init__.py")
+                      .assert(predicate::path::missing());
+              }
+
+              // Explicit --app outranks the naming heuristic and preserves the normal packaged
+              // application contract, including the runtime module and console script.
+              let app_dir = "runtime-app-stubs-name";
+              let output = context
+                  .init()
+                  .arg(app_dir)
+                  .arg("--name")
+                  .arg("foo-stubs")
+                  .arg("--app")
+                  .output()?;
+              assert!(
+                  output.status.success(),
+                  "{}",
+                  String::from_utf8_lossy(&output.stderr)
+              );
+              let app = context.temp_dir.child(app_dir);
+              app.child("src/foo_stubs/__init__.py")
+                  .assert(predicate::path::is_file());
+              app.child("src/foo-stubs/__init__.pyi")
+                  .assert(predicate::path::missing());
+              let pyproject = fs_err::read_to_string(app.join("pyproject.toml"))?;
+              assert!(pyproject.contains("[project.scripts]"));
+              assert!(pyproject.contains("foo-stubs = \"foo_stubs:main\""));
+
+              // The same precedence applies when the selected backend implies packaging. Scikit
+              // therefore keeps its existing extension starter for an explicit application.
+              let scikit_dir = "runtime-app-stubs-name-scikit";
+              let output = context
+                  .init()
+                  .arg(scikit_dir)
+                  .arg("--name")
+                  .arg("foo-stubs")
+                  .arg("--app")
+                  .arg("--build-backend")
+                  .arg("scikit")
+                  .output()?;
+              assert!(
+                  output.status.success(),
+                  "{}",
+                  String::from_utf8_lossy(&output.stderr)
+              );
+              let scikit = context.temp_dir.child(scikit_dir);
+              scikit.child("CMakeLists.txt").assert(predicate::path::is_file());
+              scikit.child("src/main.cpp").assert(predicate::path::is_file());
+              scikit
+                  .child("src/foo_stubs/_core.pyi")
+                  .assert(predicate::path::is_file());
+              scikit
+                  .child("src/foo-stubs/__init__.pyi")
+                  .assert(predicate::path::missing());
+              let pyproject = fs_err::read_to_string(scikit.join("pyproject.toml"))?;
+              assert!(pyproject.contains("pybind11>=3"));
+              assert!(pyproject.contains("[project.scripts]"));
+
+              // Maturin is rejected only for the inferred simple stub scaffold. Explicit --app
+              // keeps the existing Rust extension starter even when the distribution name ends
+              // in -stubs.
+              let maturin_dir = "runtime-app-stubs-name-maturin";
+              let output = context
+                  .init()
+                  .arg(maturin_dir)
+                  .arg("--name")
+                  .arg("foo-stubs")
+                  .arg("--app")
+                  .arg("--build-backend")
+                  .arg("maturin")
+                  .output()?;
+              assert!(
+                  output.status.success(),
+                  "{}",
+                  String::from_utf8_lossy(&output.stderr)
+              );
+              let maturin = context.temp_dir.child(maturin_dir);
+              maturin.child("Cargo.toml").assert(predicate::path::is_file());
+              maturin.child("src/lib.rs").assert(predicate::path::is_file());
+              maturin
+                  .child("src/foo_stubs/_core.pyi")
+                  .assert(predicate::path::is_file());
+              maturin
+                  .child("src/foo-stubs/__init__.pyi")
+                  .assert(predicate::path::missing());
+
+              Ok(())
+          }
+
+          '''
+
+          marker = "#[test]\nfn init_bare_lib() {"
+          tests = replace_once(tests, marker, test_block + marker, "test insertion")
+
+          lib_path.write_text(lib)
+          settings_path.write_text(settings)
+          init_path.write_text(init)
+          test_path.write_text(tests)
+          PY
+
+            cargo fmt --all
+            git diff --check
+            cargo check --locked -p uv
+            cargo test --locked -p uv --test project init::init_package_stubs_explicit_app_precedence -- --exact
+            cargo test --locked -p uv --test project init::init_package_stubs_backends -- --exact
+            cargo test --locked -p uv --test project init::init_app_build_backend_scikit -- --exact
+            cargo test --locked -p uv --test project init::init_lib_build_backend_scikit -- --exact
+            cargo test --locked -p uv --test project init::init_application_package -- --exact
+
+            git checkout -B "$branch"
+            git add crates/uv/src/lib.rs crates/uv/src/settings.rs crates/uv/src/commands/project/init.rs crates/uv/tests/project/init.rs
+            git commit -m "Prototype explicit app precedence: $mode provenance"
+            git push --force origin "HEAD:refs/heads/$branch"
+          }
+
+          build_variant local candidate/19671-app-provenance-local
+          build_variant settings candidate/19671-app-provenance-settings
+
+          git fetch origin candidate/19671-app-provenance-local candidate/19671-app-provenance-settings
+          echo "=== provenance diff stat (local -> settings) ==="
+          git diff --stat origin/candidate/19671-app-provenance-local origin/candidate/19671-app-provenance-settings
+          echo "=== provenance policy diff (local -> settings) ==="
+          git diff --unified=30 origin/candidate/19671-app-provenance-local origin/candidate/19671-app-provenance-settings -- crates/uv/src/lib.rs crates/uv/src/settings.rs crates/uv/src/commands/project/init.rs crates/uv/tests/project/init.rs
