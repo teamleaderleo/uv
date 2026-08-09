@@ -780,6 +780,13 @@ impl InitProjectKind {
             no_readme || bare,
         );
 
+        if simple_stub {
+            if let Some(config) = pyproject_simple_stub_config(name, build_backend) {
+                pyproject.push('\n');
+                pyproject.push_str(&config);
+            }
+        }
+
         match self {
             // Create only the most barebones `pyproject.toml`, no build system
             Self::Bare => {}
@@ -794,12 +801,6 @@ impl InitProjectKind {
                 if !simple_stub {
                     pyproject.push('\n');
                     pyproject.push_str(&pyproject_project_scripts(name, name.as_str(), "main"));
-                }
-
-                if let Some(config) = pyproject_simple_stub_config(name, build_backend, simple_stub)
-                {
-                    pyproject.push('\n');
-                    pyproject.push_str(&config);
                 }
 
                 pyproject.push('\n');
@@ -829,12 +830,6 @@ impl InitProjectKind {
                 }
             }
             Self::Library => {
-                if let Some(config) = pyproject_simple_stub_config(name, build_backend, simple_stub)
-                {
-                    pyproject.push('\n');
-                    pyproject.push_str(&config);
-                }
-
                 pyproject.push('\n');
                 pyproject.push_str(&pyproject_build_system(name, build_backend, simple_stub));
                 if !simple_stub {
@@ -941,21 +936,16 @@ fn pyproject_build_system(
             "#}
         .to_string(),
         ProjectBuildBackend::Flit => {
-            if simple_stub {
-                indoc::indoc! {r#"
-                    [build-system]
-                    requires = ["flit_core>=4,<5"]
-                    build-backend = "flit_core.buildapi"
-                "#}
-                .to_string()
+            let flit_requirement = if simple_stub {
+                "flit_core>=4,<5"
             } else {
-                indoc::indoc! {r#"
-                    [build-system]
-                    requires = ["flit_core>=3.2,<4"]
-                    build-backend = "flit_core.buildapi"
-                "#}
-                .to_string()
-            }
+                "flit_core>=3.2,<4"
+            };
+            indoc::formatdoc! {r#"
+                [build-system]
+                requires = ["{flit_requirement}"]
+                build-backend = "flit_core.buildapi"
+            "#}
         },
         ProjectBuildBackend::PDM => indoc::indoc! {r#"
                 [build-system]
@@ -1017,26 +1007,20 @@ fn validate_simple_stub_backend(
     package: &PackageName,
     build_backend: ProjectBuildBackend,
 ) -> Result<()> {
-    match build_backend {
-        ProjectBuildBackend::Maturin => bail!(
-            "The generated simple stub scaffold for `{package}` is incompatible with the Maturin extension-module template; choose a Python build backend or use `--bare` for a custom Maturin layout"
-        ),
-        ProjectBuildBackend::Scikit => bail!(
-            "The generated simple stub scaffold for `{package}` is incompatible with the current Scikit-build extension-module template; choose a Python build backend or use `--bare` for a custom Scikit-build layout"
-        ),
-        _ => Ok(()),
-    }
+    let backend = match build_backend {
+        ProjectBuildBackend::Maturin => "Maturin",
+        ProjectBuildBackend::Scikit => "Scikit-build",
+        _ => return Ok(()),
+    };
+    bail!(
+        "The {backend} backend does not support the generated simple stub scaffold for `{package}`; choose a supported Python build backend or use `--bare` for a custom layout"
+    )
 }
 
 fn pyproject_simple_stub_config(
     package: &PackageName,
     build_backend: ProjectBuildBackend,
-    simple_stub: bool,
 ) -> Option<String> {
-    if !simple_stub {
-        return None;
-    }
-
     let package = package.as_str();
     match build_backend {
         ProjectBuildBackend::Hatch => Some(indoc::formatdoc! {r#"
