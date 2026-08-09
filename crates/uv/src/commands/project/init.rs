@@ -46,7 +46,6 @@ pub(crate) async fn init(
     explicit_path: Option<PathBuf>,
     name: Option<PackageName>,
     init_kind: InitKind,
-    explicit_app: bool,
     bare: bool,
     description: Option<String>,
     no_description: bool,
@@ -144,7 +143,6 @@ pub(crate) async fn init(
                 &path,
                 &name,
                 project_kind,
-                explicit_app,
                 bare,
                 description,
                 no_description,
@@ -278,7 +276,6 @@ async fn init_project(
     path: &Path,
     name: &PackageName,
     project_kind: InitProjectKind,
-    explicit_app: bool,
     bare: bool,
     description: Option<String>,
     no_description: bool,
@@ -402,7 +399,6 @@ async fn init_project(
         name,
         path,
         &requires_python,
-        explicit_app,
         description.as_deref(),
         no_description,
         bare,
@@ -744,7 +740,6 @@ impl InitProjectKind {
         name: &PackageName,
         path: &Path,
         requires_python: &RequiresPython,
-        explicit_app: bool,
         description: Option<&str>,
         no_description: bool,
         bare: bool,
@@ -754,8 +749,7 @@ impl InitProjectKind {
         no_readme: bool,
     ) -> Result<()> {
         let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
-        let simple_stub = !explicit_app
-            && matches!(self, Self::ApplicationWithLibrary | Self::Library)
+        let simple_stub = matches!(self, Self::ApplicationWithLibrary | Self::Library)
             && is_simple_stub_project(name);
         if simple_stub {
             validate_simple_stub_backend(name, build_backend)?;

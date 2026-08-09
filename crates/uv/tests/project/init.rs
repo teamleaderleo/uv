@@ -633,65 +633,6 @@ fn init_simple_stub_native_backends() -> Result<()> {
 }
 
 #[test]
-fn init_simple_stub_explicit_app_precedence() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let app = context.temp_dir.child("runtime-app-stubs-name");
-    app.create_dir_all()?;
-    context
-        .init()
-        .current_dir(&app)
-        .arg("--app")
-        .arg("--name")
-        .arg("foo-stubs")
-        .assert()
-        .success();
-    app.child("src/foo_stubs/__init__.py")
-        .assert(predicate::path::is_file());
-    app.child("src/foo-stubs/__init__.pyi")
-        .assert(predicate::path::missing());
-    let pyproject = fs_err::read_to_string(app.join("pyproject.toml"))?;
-    assert!(pyproject.contains("[project.scripts]"));
-    assert!(pyproject.contains("foo-stubs = \"foo_stubs:main\""));
-
-    for (backend, expected_files) in [
-        (
-            "scikit",
-            ["CMakeLists.txt", "src/main.cpp", "src/foo_stubs/_core.pyi"],
-        ),
-        (
-            "maturin",
-            ["Cargo.toml", "src/lib.rs", "src/foo_stubs/_core.pyi"],
-        ),
-    ] {
-        let child = context
-            .temp_dir
-            .child(format!("runtime-app-stubs-{backend}"));
-        child.create_dir_all()?;
-        context
-            .init()
-            .current_dir(&child)
-            .arg("--app")
-            .arg("--name")
-            .arg("foo-stubs")
-            .arg("--build-backend")
-            .arg(backend)
-            .assert()
-            .success();
-        for file in expected_files {
-            child.child(file).assert(predicate::path::is_file());
-        }
-        child
-            .child("src/foo-stubs/__init__.pyi")
-            .assert(predicate::path::missing());
-        let pyproject = fs_err::read_to_string(child.join("pyproject.toml"))?;
-        assert!(pyproject.contains("[project.scripts]"));
-    }
-
-    Ok(())
-}
-
-#[test]
 fn init_bare_lib() {
     let context = uv_test::test_context!("3.12");
 

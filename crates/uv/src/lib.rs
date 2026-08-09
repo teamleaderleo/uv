@@ -2273,10 +2273,6 @@ async fn run_project(
 
     match *project_command {
         ProjectCommand::Init(args) => {
-            // Preserve explicit application intent before settings resolution collapses it into
-            // the packaged-application project kind.
-            let explicit_app = args.app;
-
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::InitSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
@@ -2301,7 +2297,6 @@ async fn run_project(
                 args.path,
                 args.name,
                 args.kind,
-                explicit_app,
                 args.bare,
                 args.description,
                 args.no_description,
