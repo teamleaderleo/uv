@@ -473,6 +473,171 @@ fn init_package() -> Result<()> {
 }
 
 #[test]
+fn init_package_stubs_backends() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let cases: &[(&str, &[&str], &[&str])] = &[
+        ("uv", &["build-backend = \"uv_build\""], &[]),
+        (
+            "hatchling",
+            &[
+                "packages = [\"src/foo-stubs\"]",
+                "build-backend = \"hatchling.build\"",
+            ],
+            &[],
+        ),
+        (
+            "poetry",
+            &[
+                "packages = [{ include = \"foo-stubs\", from = \"src\" }]",
+                "build-backend = \"poetry.core.masonry.api\"",
+            ],
+            &[],
+        ),
+        (
+            "pdm",
+            &[
+                "includes = [\"src/foo-stubs\"]",
+                "build-backend = \"pdm.backend\"",
+            ],
+            &[],
+        ),
+        (
+            "setuptools",
+            &[
+                "\"*\" = [\"*.pyi\"]",
+                "build-backend = \"setuptools.build_meta\"",
+            ],
+            &[],
+        ),
+        (
+            "flit",
+            &[
+                "requires = [\"flit_core>=4,<5\"]",
+                "build-backend = \"flit_core.buildapi\"",
+            ],
+            &[],
+        ),
+    ];
+
+    for &(backend, required, forbidden) in cases {
+        let dir = format!("simple-stub-{backend}");
+        let output = context
+            .init()
+            .arg(&dir)
+            .arg("--name")
+            .arg("foo-stubs")
+            .arg("--package")
+            .arg("--build-backend")
+            .arg(backend)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let child = context.temp_dir.child(&dir);
+        let _ = fs_err::read_to_string(child.join("src/foo-stubs/__init__.pyi"))?;
+        child
+            .child("src/foo_stubs/__init__.py")
+            .assert(predicate::path::missing());
+        child
+            .child("src/foo-stubs/py.typed")
+            .assert(predicate::path::missing());
+
+        let pyproject = fs_err::read_to_string(child.join("pyproject.toml"))?;
+        assert!(!pyproject.contains("[project.scripts]"), "{backend}");
+        for snippet in required {
+            assert!(
+                pyproject.contains(snippet),
+                "{backend} missing `{snippet}`:\n{pyproject}"
+            );
+        }
+        for snippet in forbidden {
+            assert!(
+                !pyproject.contains(snippet),
+                "{backend} unexpectedly contains `{snippet}`:\n{pyproject}"
+            );
+        }
+    }
+
+    let maturin_dir = "simple-stub-maturin-reject";
+    let output = context
+        .init()
+        .arg(maturin_dir)
+        .arg("--name")
+        .arg("foo-stubs")
+        .arg("--package")
+        .arg("--build-backend")
+        .arg("maturin")
+        .output()?;
+    assert!(!output.status.success());
+    context
+        .temp_dir
+        .child(maturin_dir)
+        .assert(predicate::path::missing());
+
+    let maturin_bare_dir = "simple-stub-maturin-bare";
+    let output = context
+        .init()
+        .arg(maturin_bare_dir)
+        .arg("--name")
+        .arg("foo-stubs")
+        .arg("--bare")
+        .arg("--build-backend")
+        .arg("maturin")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let maturin_bare = context.temp_dir.child(maturin_bare_dir);
+    let pyproject = fs_err::read_to_string(maturin_bare.join("pyproject.toml"))?;
+    assert!(pyproject.contains("build-backend = \"maturin\""));
+    maturin_bare.child("src").assert(predicate::path::missing());
+
+    let scikit_dir = "simple-stub-scikit-reject";
+    let output = context
+        .init()
+        .arg(scikit_dir)
+        .arg("--name")
+        .arg("foo-stubs")
+        .arg("--package")
+        .arg("--build-backend")
+        .arg("scikit")
+        .output()?;
+    assert!(!output.status.success());
+    context
+        .temp_dir
+        .child(scikit_dir)
+        .assert(predicate::path::missing());
+
+    let scikit_bare_dir = "simple-stub-scikit-bare";
+    let output = context
+        .init()
+        .arg(scikit_bare_dir)
+        .arg("--name")
+        .arg("foo-stubs")
+        .arg("--bare")
+        .arg("--build-backend")
+        .arg("scikit")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let scikit_bare = context.temp_dir.child(scikit_bare_dir);
+    let pyproject = fs_err::read_to_string(scikit_bare.join("pyproject.toml"))?;
+    assert!(pyproject.contains("build-backend = \"scikit_build_core.build\""));
+    scikit_bare.child("src").assert(predicate::path::missing());
+
+    Ok(())
+}
+
+#[test]
 fn init_bare_lib() {
     let context = uv_test::test_context!("3.12");
 
