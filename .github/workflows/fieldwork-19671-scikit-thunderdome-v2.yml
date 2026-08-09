@@ -1,0 +1,40 @@
+name: Fieldwork 19671 Scikit thunderdome v2
+
+on:
+  pull_request:
+    branches:
+      - automation/19671-scikit-thunderdome-base-20260809
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    env:
+      BASE_SHA: dd0584d560a4693b5713a78be54304123ada3e77
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned toolchain formatter
+        run: rustup component add rustfmt
+
+      - name: Run fenced prototype materializer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/fieldwork-19671-scikit-thunderdome.yml').read_text()
+          marker = '        run: |\n'
+          if source.count(marker) != 1:
+              raise SystemExit('expected exactly one run block in v1 carrier')
+          body = source.split(marker, 1)[1]
+          lines = body.splitlines()
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines)
+          Path('/tmp/fieldwork-19671-scikit-thunderdome.sh').write_text(script + '\n')
+          PY
+          bash /tmp/fieldwork-19671-scikit-thunderdome.sh

@@ -1,0 +1,174 @@
+name: Fieldwork 19671 Scikit thunderdome
+
+on:
+  pull_request:
+    branches:
+      - automation/19671-scikit-thunderdome-base-20260809
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    env:
+      BASE_SHA: dd0584d560a4693b5713a78be54304123ada3e77
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize and validate both policies
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          build_variant() {
+            mode="$1"
+            branch="$2"
+
+            git checkout --detach "$BASE_SHA"
+            git reset --hard "$BASE_SHA"
+            git clean -fdx
+
+            MODE="$mode" python - <<'PY'
+          import os
+          from pathlib import Path
+
+          mode = os.environ["MODE"]
+          init_path = Path("crates/uv/src/commands/project/init.rs")
+          test_path = Path("crates/uv/tests/project/init.rs")
+          src = init_path.read_text()
+          tests = test_path.read_text()
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          # Infer the simple stub scaffold only for source-generating packaged modes,
+          # and reject Maturin before creating project/VCS state. The Scikit rejection
+          # variant adds one additional validation row here.
+          old = '''        no_readme: bool,\n    ) -> Result<()> {\n        fs_err::create_dir_all(path)?;\n'''
+          validation = '''        no_readme: bool,\n    ) -> Result<()> {\n        let simple_stub = matches!(self, Self::ApplicationWithLibrary | Self::Library)\n            && simple_stub_package_module_dir(name).is_some();\n        let resolved_build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);\n\n        if simple_stub && resolved_build_backend == ProjectBuildBackend::Maturin {\n            bail!(\n                "Maturin does not support UV's generated simple stub package layout; use another build backend or `--bare` for a custom layout"\n            );\n        }\n'''
+          if mode == "reject":
+              validation += '''        if simple_stub && resolved_build_backend == ProjectBuildBackend::Scikit {\n            bail!(\n                "UV's Scikit template is an extension-module starter and cannot generate the simple stub package layout; use another build backend or `--bare` for a custom Scikit project"\n            );\n        }\n'''
+          validation += '''\n        fs_err::create_dir_all(path)?;\n'''
+          src = replace_once(src, old, validation, "init validation")
+
+          old = '''                // Since it'll be packaged, we can add a `[project.scripts]` entry\n                pyproject.push('\\n');\n                pyproject.push_str(&pyproject_project_scripts(name, name.as_str(), "main"));\n'''
+          new = '''                // The generated simple stub scaffold is type-only, so it has no runtime entry point.\n                if !simple_stub {\n                    pyproject.push('\\n');\n                    pyproject.push_str(&pyproject_project_scripts(name, name.as_str(), "main"));\n                }\n'''
+          src = replace_once(src, old, new, "script suppression")
+
+          count = src.count("pyproject_build_system(name, build_backend)")
+          if count != 3:
+              raise SystemExit(f"build-system calls: expected 3, found {count}")
+          src = src.replace(
+              "pyproject_build_system(name, build_backend)",
+              "pyproject_build_system(name, build_backend, simple_stub)",
+          )
+
+          count = src.count("pyproject_build_backend_prerequisites(name, path, build_backend)?;")
+          if count != 2:
+              raise SystemExit(f"prerequisite calls: expected 2, found {count}")
+          src = src.replace(
+              "pyproject_build_backend_prerequisites(name, path, build_backend)?;",
+              "pyproject_build_backend_prerequisites(name, path, build_backend, simple_stub)?;",
+          )
+
+          src = replace_once(
+              src,
+              "generate_package_scripts(name, path, build_backend, false)?;",
+              "generate_package_scripts(name, path, build_backend, false, simple_stub)?;",
+              "application source call",
+          )
+          src = replace_once(
+              src,
+              "generate_package_scripts(name, path, build_backend, true)?;",
+              "generate_package_scripts(name, path, build_backend, true, simple_stub)?;",
+              "library source call",
+          )
+
+          old = '''/// Generate the `[build-system]` section of a `pyproject.toml`.\n/// Generate the `[tool.]` section of a `pyproject.toml` where applicable.\nfn pyproject_build_system(package: &PackageName, build_backend: ProjectBuildBackend) -> String {\n    let module_name = package.as_dist_info_name();\n'''
+          new = '''fn simple_stub_package_module_dir(package: &PackageName) -> Option<String> {\n    package\n        .as_dist_info_name()\n        .strip_suffix("_stubs")\n        .map(|stem| format!("{stem}-stubs"))\n}\n\n/// Generate the `[build-system]` section of a `pyproject.toml`.\n/// Generate the `[tool.]` section of a `pyproject.toml` where applicable.\nfn pyproject_build_system(\n    package: &PackageName,\n    build_backend: ProjectBuildBackend,\n    simple_stub: bool,\n) -> String {\n    let module_name = package.as_dist_info_name();\n    let stub_module_dir = simple_stub_package_module_dir(package)\n        .unwrap_or_else(|| module_name.to_string());\n'''
+          src = replace_once(src, old, new, "build-system signature")
+
+          backend_replacements = {
+              "hatch": (
+                  '''        ProjectBuildBackend::Hatch => indoc::indoc! {r#"\n                [build-system]\n                requires = ["hatchling"]\n                build-backend = "hatchling.build"\n            "#}\n        .to_string(),\n''',
+                  '''        ProjectBuildBackend::Hatch if simple_stub => indoc::formatdoc! {r#"\n                [tool.hatch.build.targets.wheel]\n                packages = ["src/{stub_module_dir}"]\n\n                [build-system]\n                requires = ["hatchling"]\n                build-backend = "hatchling.build"\n            "#},\n        ProjectBuildBackend::Hatch => indoc::indoc! {r#"\n                [build-system]\n                requires = ["hatchling"]\n                build-backend = "hatchling.build"\n            "#}\n        .to_string(),\n'''
+              ),
+              "flit": (
+                  '''        ProjectBuildBackend::Flit => indoc::indoc! {r#"\n                [build-system]\n                requires = ["flit_core>=3.2,<4"]\n                build-backend = "flit_core.buildapi"\n            "#}\n        .to_string(),\n''',
+                  '''        ProjectBuildBackend::Flit if simple_stub => indoc::indoc! {r#"\n                [build-system]\n                requires = ["flit_core>=4,<5"]\n                build-backend = "flit_core.buildapi"\n            "#}\n        .to_string(),\n        ProjectBuildBackend::Flit => indoc::indoc! {r#"\n                [build-system]\n                requires = ["flit_core>=3.2,<4"]\n                build-backend = "flit_core.buildapi"\n            "#}\n        .to_string(),\n'''
+              ),
+              "pdm": (
+                  '''        ProjectBuildBackend::PDM => indoc::indoc! {r#"\n                [build-system]\n                requires = ["pdm-backend"]\n                build-backend = "pdm.backend"\n            "#}\n        .to_string(),\n''',
+                  '''        ProjectBuildBackend::PDM if simple_stub => indoc::formatdoc! {r#"\n                [tool.pdm.build]\n                includes = ["src/{stub_module_dir}"]\n\n                [build-system]\n                requires = ["pdm-backend"]\n                build-backend = "pdm.backend"\n            "#},\n        ProjectBuildBackend::PDM => indoc::indoc! {r#"\n                [build-system]\n                requires = ["pdm-backend"]\n                build-backend = "pdm.backend"\n            "#}\n        .to_string(),\n'''
+              ),
+              "setuptools": (
+                  '''        ProjectBuildBackend::Setuptools => indoc::indoc! {r#"\n                [build-system]\n                requires = ["setuptools>=61"]\n                build-backend = "setuptools.build_meta"\n            "#}\n        .to_string(),\n''',
+                  '''        ProjectBuildBackend::Setuptools if simple_stub => indoc::indoc! {r#"\n                [tool.setuptools.package-data]\n                "*" = ["*.pyi"]\n\n                [build-system]\n                requires = ["setuptools>=61"]\n                build-backend = "setuptools.build_meta"\n            "#}\n        .to_string(),\n        ProjectBuildBackend::Setuptools => indoc::indoc! {r#"\n                [build-system]\n                requires = ["setuptools>=61"]\n                build-backend = "setuptools.build_meta"\n            "#}\n        .to_string(),\n'''
+              ),
+              "poetry": (
+                  '''        ProjectBuildBackend::Poetry => indoc::indoc! {r#"\n                [build-system]\n                requires = ["poetry-core>=2,<3"]\n                build-backend = "poetry.core.masonry.api"\n            "#}\n        .to_string(),\n''',
+                  '''        ProjectBuildBackend::Poetry if simple_stub => indoc::formatdoc! {r#"\n                [tool.poetry]\n                packages = [{{ include = "{stub_module_dir}", from = "src" }}]\n\n                [build-system]\n                requires = ["poetry-core>=2,<3"]\n                build-backend = "poetry.core.masonry.api"\n            "#},\n        ProjectBuildBackend::Poetry => indoc::indoc! {r#"\n                [build-system]\n                requires = ["poetry-core>=2,<3"]\n                build-backend = "poetry.core.masonry.api"\n            "#}\n        .to_string(),\n'''
+              ),
+          }
+          for label, (old_arm, new_arm) in backend_replacements.items():
+              src = replace_once(src, old_arm, new_arm, f"{label} arm")
+
+          if mode == "support":
+              old = '''        ProjectBuildBackend::Scikit => indoc::indoc! {r#"\n                [tool.scikit-build]\n                minimum-version = "build-system.requires"\n                build-dir = "build/{wheel_tag}"\n\n                [tool.uv]\n                cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.{h,c,hpp,cpp}" }, { file = "CMakeLists.txt" }]\n\n                [build-system]\n                requires = ["scikit-build-core>=0.12", "pybind11>=3"]\n                build-backend = "scikit_build_core.build"\n            "#}\n        .to_string(),\n'''
+              new = '''        ProjectBuildBackend::Scikit if simple_stub => indoc::formatdoc! {r#"\n                [tool.scikit-build]\n                minimum-version = "build-system.requires"\n                wheel.cmake = false\n                wheel.packages = ["src/{stub_module_dir}"]\n\n                [build-system]\n                requires = ["scikit-build-core>=0.12"]\n                build-backend = "scikit_build_core.build"\n            "#},\n        ProjectBuildBackend::Scikit => indoc::indoc! {r#"\n                [tool.scikit-build]\n                minimum-version = "build-system.requires"\n                build-dir = "build/{wheel_tag}"\n\n                [tool.uv]\n                cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.{h,c,hpp,cpp}" }, { file = "CMakeLists.txt" }]\n\n                [build-system]\n                requires = ["scikit-build-core>=0.12", "pybind11>=3"]\n                build-backend = "scikit_build_core.build"\n            "#}\n        .to_string(),\n'''
+              src = replace_once(src, old, new, "scikit support arm")
+
+          old = '''fn pyproject_build_backend_prerequisites(\n    package: &PackageName,\n    path: &Path,\n    build_backend: ProjectBuildBackend,\n) -> Result<()> {\n'''
+          new = '''fn pyproject_build_backend_prerequisites(\n    package: &PackageName,\n    path: &Path,\n    build_backend: ProjectBuildBackend,\n    simple_stub: bool,\n) -> Result<()> {\n'''
+          src = replace_once(src, old, new, "prerequisite signature")
+
+          old = '''        ProjectBuildBackend::Scikit => {\n            // Generate CMakeLists.txt\n'''
+          new = '''        ProjectBuildBackend::Scikit => {\n            if simple_stub {\n                return Ok(());\n            }\n\n            // Generate CMakeLists.txt\n'''
+          src = replace_once(src, old, new, "scikit prerequisite suppression")
+
+          old = '''fn generate_package_scripts(\n    package: &PackageName,\n    path: &Path,\n    build_backend: ProjectBuildBackend,\n    is_lib: bool,\n) -> Result<()> {\n    let module_name = package.as_dist_info_name();\n\n    let src_dir = path.join("src");\n    let pkg_dir = src_dir.join(&*module_name);\n    fs_err::create_dir_all(&pkg_dir)?;\n'''
+          new = '''fn generate_package_scripts(\n    package: &PackageName,\n    path: &Path,\n    build_backend: ProjectBuildBackend,\n    is_lib: bool,\n    simple_stub: bool,\n) -> Result<()> {\n    let src_dir = path.join("src");\n\n    if simple_stub {\n        let stub_module_dir = simple_stub_package_module_dir(package)\n            .expect("simple stub scaffold requires a -stubs package name");\n        let pkg_dir = src_dir.join(stub_module_dir);\n        fs_err::create_dir_all(&pkg_dir)?;\n        let init_pyi = pkg_dir.join("__init__.pyi");\n        if !init_pyi.try_exists()? {\n            fs_err::write(init_pyi, "")?;\n        }\n        return Ok(());\n    }\n\n    let module_name = package.as_dist_info_name();\n    let pkg_dir = src_dir.join(&*module_name);\n    fs_err::create_dir_all(&pkg_dir)?;\n'''
+          src = replace_once(src, old, new, "source generator")
+
+          init_path.write_text(src)
+
+          scikit_case = '''        (\n            "scikit",\n            &[\n                "wheel.cmake = false",\n                "wheel.packages = [\\\"src/foo-stubs\\\"]",\n                "requires = [\\\"scikit-build-core>=0.12\\\"]",\n            ],\n            &["pybind11", "cache-keys", "build-dir ="],\n        ),\n''' if mode == "support" else ""
+
+          scikit_reject = '''\n    let scikit_dir = "simple-stub-scikit-reject";\n    let output = context\n        .init()\n        .arg(scikit_dir)\n        .arg("--name")\n        .arg("foo-stubs")\n        .arg("--package")\n        .arg("--build-backend")\n        .arg("scikit")\n        .output()?;\n    assert!(!output.status.success());\n    context\n        .temp_dir\n        .child(scikit_dir)\n        .assert(predicate::path::missing());\n\n    let scikit_bare_dir = "simple-stub-scikit-bare";\n    let output = context\n        .init()\n        .arg(scikit_bare_dir)\n        .arg("--name")\n        .arg("foo-stubs")\n        .arg("--bare")\n        .arg("--build-backend")\n        .arg("scikit")\n        .output()?;\n    assert!(\n        output.status.success(),\n        "{}",\n        String::from_utf8_lossy(&output.stderr)\n    );\n    let scikit_bare = context.temp_dir.child(scikit_bare_dir);\n    let pyproject = fs_err::read_to_string(scikit_bare.join("pyproject.toml"))?;\n    assert!(pyproject.contains("build-backend = \\\"scikit_build_core.build\\\""));\n    scikit_bare\n        .child("src")\n        .assert(predicate::path::missing());\n''' if mode == "reject" else ""
+
+          test_block = f'''#[test]\nfn init_package_stubs_backends() -> Result<()> {{\n    let context = uv_test::test_context!("3.12");\n\n    let cases: &[(&str, &[&str], &[&str])] = &[\n        ("uv", &["build-backend = \\\"uv_build\\\""], &[]),\n        (\n            "hatchling",\n            &["packages = [\\\"src/foo-stubs\\\"]", "build-backend = \\\"hatchling.build\\\""],\n            &[],\n        ),\n        (\n            "poetry",\n            &[\n                "packages = [{{ include = \\\"foo-stubs\\\", from = \\\"src\\\" }}]",\n                "build-backend = \\\"poetry.core.masonry.api\\\"",\n            ],\n            &[],\n        ),\n        (\n            "pdm",\n            &["includes = [\\\"src/foo-stubs\\\"]", "build-backend = \\\"pdm.backend\\\""],\n            &[],\n        ),\n        (\n            "setuptools",\n            &["\\\"*\\\" = [\\\"*.pyi\\\"]", "build-backend = \\\"setuptools.build_meta\\\""],\n            &[],\n        ),\n        (\n            "flit",\n            &["requires = [\\\"flit_core>=4,<5\\\"]", "build-backend = \\\"flit_core.buildapi\\\""],\n            &[],\n        ),\n{scikit_case}    ];\n\n    for &(backend, required, forbidden) in cases {{\n        let dir = format!("simple-stub-{{backend}}");\n        let output = context\n            .init()\n            .arg(&dir)\n            .arg("--name")\n            .arg("foo-stubs")\n            .arg("--package")\n            .arg("--build-backend")\n            .arg(backend)\n            .output()?;\n        assert!(\n            output.status.success(),\n            "{{backend}}: {{}}",\n            String::from_utf8_lossy(&output.stderr)\n        );\n\n        let child = context.temp_dir.child(&dir);\n        let _ = fs_err::read_to_string(child.join("src/foo-stubs/__init__.pyi"))?;\n        child\n            .child("src/foo_stubs/__init__.py")\n            .assert(predicate::path::missing());\n        child\n            .child("src/foo-stubs/py.typed")\n            .assert(predicate::path::missing());\n\n        let pyproject = fs_err::read_to_string(child.join("pyproject.toml"))?;\n        assert!(!pyproject.contains("[project.scripts]"), "{{backend}}");\n        for snippet in required {{\n            assert!(pyproject.contains(snippet), "{{backend}} missing `{{snippet}}`:\\n{{pyproject}}");\n        }}\n        for snippet in forbidden {{\n            assert!(!pyproject.contains(snippet), "{{backend}} unexpectedly contains `{{snippet}}`:\\n{{pyproject}}");\n        }}\n    }}\n\n    let maturin_dir = "simple-stub-maturin-reject";\n    let output = context\n        .init()\n        .arg(maturin_dir)\n        .arg("--name")\n        .arg("foo-stubs")\n        .arg("--package")\n        .arg("--build-backend")\n        .arg("maturin")\n        .output()?;\n    assert!(!output.status.success());\n    context\n        .temp_dir\n        .child(maturin_dir)\n        .assert(predicate::path::missing());\n\n    let maturin_bare_dir = "simple-stub-maturin-bare";\n    let output = context\n        .init()\n        .arg(maturin_bare_dir)\n        .arg("--name")\n        .arg("foo-stubs")\n        .arg("--bare")\n        .arg("--build-backend")\n        .arg("maturin")\n        .output()?;\n    assert!(\n        output.status.success(),\n        "{{}}",\n        String::from_utf8_lossy(&output.stderr)\n    );\n    let maturin_bare = context.temp_dir.child(maturin_bare_dir);\n    let pyproject = fs_err::read_to_string(maturin_bare.join("pyproject.toml"))?;\n    assert!(pyproject.contains("build-backend = \\\"maturin\\\""));\n    maturin_bare\n        .child("src")\n        .assert(predicate::path::missing());\n{scikit_reject}\n    Ok(())\n}}\n\n'''
+
+          marker = "#[test]\nfn init_bare_lib() {"
+          tests = replace_once(tests, marker, test_block + marker, "test insertion")
+          test_path.write_text(tests)
+          PY
+
+            cargo fmt --all
+            git diff --check
+            cargo check --locked -p uv
+            cargo test --locked -p uv --test project init::init_package_stubs_backends -- --exact
+            cargo test --locked -p uv --test project init::init_app_build_backend_scikit -- --exact
+            cargo test --locked -p uv --test project init::init_lib_build_backend_scikit -- --exact
+
+            git checkout -B "$branch"
+            git add crates/uv/src/commands/project/init.rs crates/uv/tests/project/init.rs
+            git commit -m "Prototype simple stub initialization: Scikit $mode"
+            git push --force origin "HEAD:refs/heads/$branch"
+          }
+
+          build_variant support candidate/19671-simple-stubs-scikit-support
+          build_variant reject candidate/19671-simple-stubs-scikit-reject
+
+          git fetch origin candidate/19671-simple-stubs-scikit-support candidate/19671-simple-stubs-scikit-reject
+          echo "=== candidate diff stat ==="
+          git diff --stat origin/candidate/19671-simple-stubs-scikit-reject origin/candidate/19671-simple-stubs-scikit-support
+          echo "=== candidate policy diff ==="
+          git diff --unified=40 origin/candidate/19671-simple-stubs-scikit-reject origin/candidate/19671-simple-stubs-scikit-support -- crates/uv/src/commands/project/init.rs crates/uv/tests/project/init.rs
