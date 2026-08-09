@@ -805,9 +805,7 @@ impl InitProjectKind {
 
                 pyproject.push('\n');
                 pyproject.push_str(&pyproject_build_system(name, build_backend, simple_stub));
-                if !simple_stub {
-                    pyproject_build_backend_prerequisites(name, path, build_backend)?;
-                }
+                pyproject_build_backend_prerequisites(name, path, build_backend)?;
 
                 generate_package_scripts(name, path, build_backend, simple_stub, false)?;
             }
@@ -832,9 +830,7 @@ impl InitProjectKind {
             Self::Library => {
                 pyproject.push('\n');
                 pyproject.push_str(&pyproject_build_system(name, build_backend, simple_stub));
-                if !simple_stub {
-                    pyproject_build_backend_prerequisites(name, path, build_backend)?;
-                }
+                pyproject_build_backend_prerequisites(name, path, build_backend)?;
 
                 generate_package_scripts(name, path, build_backend, simple_stub, true)?;
             }
@@ -1042,8 +1038,10 @@ fn pyproject_simple_stub_config(
             [tool.poetry]
             packages = [{{ include = "{package}", from = "src" }}]
         "#}),
-        ProjectBuildBackend::Uv | ProjectBuildBackend::Flit | ProjectBuildBackend::Scikit => None,
-        ProjectBuildBackend::Maturin => unreachable!("validated simple stub backend"),
+        ProjectBuildBackend::Uv | ProjectBuildBackend::Flit => None,
+        ProjectBuildBackend::Maturin | ProjectBuildBackend::Scikit => {
+            unreachable!("validated simple stub backend")
+        }
     }
 }
 
