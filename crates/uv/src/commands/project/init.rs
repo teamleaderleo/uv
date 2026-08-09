@@ -748,6 +748,13 @@ impl InitProjectKind {
         author_from: Option<AuthorFrom>,
         no_readme: bool,
     ) -> Result<()> {
+        let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
+        let simple_stub = matches!(self, Self::ApplicationWithLibrary | Self::Library)
+            && is_simple_stub_project(name);
+        if simple_stub {
+            validate_simple_stub_backend(name, build_backend)?;
+        }
+
         fs_err::create_dir_all(path)?;
 
         // Initialize the version control system first so that Git configuration can properly
@@ -778,24 +785,30 @@ impl InitProjectKind {
             Self::Bare => {}
             // Create only a barebones `pyproject.toml`, but with a build system table
             Self::BareWithBuildSystem => {
-                // Add a build system
-                let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
+                // Bare initialization deliberately leaves source-layout decisions to the user.
                 pyproject.push('\n');
-                pyproject.push_str(&pyproject_build_system(name, build_backend));
+                pyproject.push_str(&pyproject_build_system(name, build_backend, false));
             }
             Self::ApplicationWithLibrary => {
-                // Since it'll be packaged, we can add a `[project.scripts]` entry
-                pyproject.push('\n');
-                pyproject.push_str(&pyproject_project_scripts(name, name.as_str(), "main"));
+                // The inferred simple stub scaffold has no generated runtime module to target.
+                if !simple_stub {
+                    pyproject.push('\n');
+                    pyproject.push_str(&pyproject_project_scripts(name, name.as_str(), "main"));
+                }
 
-                // Add a build system
-                let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
-                pyproject.push('\n');
-                pyproject.push_str(&pyproject_build_system(name, build_backend));
-                pyproject_build_backend_prerequisites(name, path, build_backend)?;
+                if let Some(config) = pyproject_simple_stub_config(name, build_backend, simple_stub)
+                {
+                    pyproject.push('\n');
+                    pyproject.push_str(&config);
+                }
 
-                // Generate `src` files with app-style `main()` in `__init__.py`
-                generate_package_scripts(name, path, build_backend, false)?;
+                pyproject.push('\n');
+                pyproject.push_str(&pyproject_build_system(name, build_backend, simple_stub));
+                if !simple_stub {
+                    pyproject_build_backend_prerequisites(name, path, build_backend)?;
+                }
+
+                generate_package_scripts(name, path, build_backend, simple_stub, false)?;
             }
             Self::Application => {
                 let main_contents = indoc::formatdoc! {r#"
@@ -816,13 +829,19 @@ impl InitProjectKind {
                 }
             }
             Self::Library => {
-                let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
-                pyproject.push('\n');
-                pyproject.push_str(&pyproject_build_system(name, build_backend));
-                pyproject_build_backend_prerequisites(name, path, build_backend)?;
+                if let Some(config) = pyproject_simple_stub_config(name, build_backend, simple_stub)
+                {
+                    pyproject.push('\n');
+                    pyproject.push_str(&config);
+                }
 
-                // Generate `src` files
-                generate_package_scripts(name, path, build_backend, true)?;
+                pyproject.push('\n');
+                pyproject.push_str(&pyproject_build_system(name, build_backend, simple_stub));
+                if !simple_stub {
+                    pyproject_build_backend_prerequisites(name, path, build_backend)?;
+                }
+
+                generate_package_scripts(name, path, build_backend, simple_stub, true)?;
             }
         }
         fs_err::write(path.join("pyproject.toml"), pyproject)?;
@@ -887,7 +906,11 @@ fn pyproject_project(
 
 /// Generate the `[build-system]` section of a `pyproject.toml`.
 /// Generate the `[tool.]` section of a `pyproject.toml` where applicable.
-fn pyproject_build_system(package: &PackageName, build_backend: ProjectBuildBackend) -> String {
+fn pyproject_build_system(
+    package: &PackageName,
+    build_backend: ProjectBuildBackend,
+    simple_stub: bool,
+) -> String {
     let module_name = package.as_dist_info_name();
     match build_backend {
         ProjectBuildBackend::Uv => {
@@ -917,12 +940,23 @@ fn pyproject_build_system(package: &PackageName, build_backend: ProjectBuildBack
                 build-backend = "hatchling.build"
             "#}
         .to_string(),
-        ProjectBuildBackend::Flit => indoc::indoc! {r#"
-                [build-system]
-                requires = ["flit_core>=3.2,<4"]
-                build-backend = "flit_core.buildapi"
-            "#}
-        .to_string(),
+        ProjectBuildBackend::Flit => {
+            if simple_stub {
+                indoc::indoc! {r#"
+                    [build-system]
+                    requires = ["flit_core>=4,<5"]
+                    build-backend = "flit_core.buildapi"
+                "#}
+                .to_string()
+            } else {
+                indoc::indoc! {r#"
+                    [build-system]
+                    requires = ["flit_core>=3.2,<4"]
+                    build-backend = "flit_core.buildapi"
+                "#}
+                .to_string()
+            }
+        },
         ProjectBuildBackend::PDM => indoc::indoc! {r#"
                 [build-system]
                 requires = ["pdm-backend"]
@@ -968,6 +1002,64 @@ fn pyproject_build_system(package: &PackageName, build_backend: ProjectBuildBack
                 build-backend = "scikit_build_core.build"
             "#}
         .to_string(),
+    }
+}
+
+/// Infer UV's simple generated stub scaffold from the canonical project name.
+///
+/// This is a scaffold-generation heuristic, not a claim that every distribution ending in
+/// `-stubs` contains only stub files. Bare initialization deliberately bypasses this inference.
+fn is_simple_stub_project(package: &PackageName) -> bool {
+    package.as_str().ends_with("-stubs")
+}
+
+fn validate_simple_stub_backend(
+    package: &PackageName,
+    build_backend: ProjectBuildBackend,
+) -> Result<()> {
+    match build_backend {
+        ProjectBuildBackend::Maturin => bail!(
+            "The generated simple stub scaffold for `{package}` is incompatible with the Maturin extension-module template; choose a Python build backend or use `--bare` for a custom Maturin layout"
+        ),
+        ProjectBuildBackend::Scikit => bail!(
+            "The generated simple stub scaffold for `{package}` is incompatible with the current Scikit-build extension-module template; choose a Python build backend or use `--bare` for a custom Scikit-build layout"
+        ),
+        _ => Ok(()),
+    }
+}
+
+fn pyproject_simple_stub_config(
+    package: &PackageName,
+    build_backend: ProjectBuildBackend,
+    simple_stub: bool,
+) -> Option<String> {
+    if !simple_stub {
+        return None;
+    }
+
+    let package = package.as_str();
+    match build_backend {
+        ProjectBuildBackend::Hatch => Some(indoc::formatdoc! {r#"
+            [tool.hatch.build.targets.wheel]
+            packages = ["src/{package}"]
+        "#}),
+        ProjectBuildBackend::PDM => Some(indoc::formatdoc! {r#"
+            [tool.pdm.build]
+            includes = ["src/{package}"]
+        "#}),
+        ProjectBuildBackend::Setuptools => Some(
+            indoc::indoc! {r#"
+            [tool.setuptools.package-data]
+            "*" = ["*.pyi"]
+        "#}
+            .to_string(),
+        ),
+        ProjectBuildBackend::Poetry => Some(indoc::formatdoc! {r#"
+            [tool.poetry]
+            packages = [{{ include = "{package}", from = "src" }}]
+        "#}),
+        ProjectBuildBackend::Uv | ProjectBuildBackend::Flit | ProjectBuildBackend::Scikit => None,
+        ProjectBuildBackend::Maturin => unreachable!("validated simple stub backend"),
     }
 }
 
@@ -1041,13 +1133,26 @@ fn generate_package_scripts(
     package: &PackageName,
     path: &Path,
     build_backend: ProjectBuildBackend,
+    simple_stub: bool,
     is_lib: bool,
 ) -> Result<()> {
     let module_name = package.as_dist_info_name();
 
     let src_dir = path.join("src");
-    let pkg_dir = src_dir.join(&*module_name);
+    let pkg_dir = if simple_stub {
+        src_dir.join(package.as_str())
+    } else {
+        src_dir.join(&*module_name)
+    };
     fs_err::create_dir_all(&pkg_dir)?;
+
+    if simple_stub {
+        let init_pyi = pkg_dir.join("__init__.pyi");
+        if !init_pyi.try_exists()? {
+            fs_err::write(init_pyi, "")?;
+        }
+        return Ok(());
+    }
 
     let pure_python_script = if is_lib {
         indoc::formatdoc! {r#"
