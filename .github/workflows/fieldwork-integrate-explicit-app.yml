@@ -1,0 +1,57 @@
+name: Fieldwork integrate explicit app precedence
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/simple-stub-scaffold-current
+          fetch-depth: 0
+
+      - name: Integrate explicit app precedence and validate once
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib=crates/uv/src/lib.rs
+          init=crates/uv/src/commands/project/init.rs
+          tests=crates/uv/tests/project/init.rs
+
+          if grep -q 'let explicit_app = args.app;' "$lib"; then
+            echo 'Explicit-app precedence is already materialized.'
+            cargo test --package uv --test it simple_stub -- --nocapture
+            exit 0
+          fi
+
+          curl -fsSL \
+            'https://api.github.com/repos/teamleaderleo/linux-fieldwork/contents/investigations/uv-stubs-backend-scope/product/uv_explicit_app_integration.py?ref=research%2F487-uv-simple-stub-candidate' \
+            -o "$RUNNER_TEMP/explicit_app.json"
+          python - "$RUNNER_TEMP/explicit_app.json" "$RUNNER_TEMP/uv_explicit_app_integration.py" <<'PY'
+          import base64
+          import json
+          import pathlib
+          import sys
+
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          pathlib.Path(sys.argv[2]).write_bytes(base64.b64decode(payload['content']))
+          PY
+
+          python "$RUNNER_TEMP/uv_explicit_app_integration.py" "$lib" "$init" "$tests"
+          rustup component add --toolchain 1.97.1-x86_64-unknown-linux-gnu rustfmt
+          cargo fmt --all
+          git diff --check
+          cargo test --package uv --test it simple_stub -- --nocapture
+          git diff --stat
+
+          git config user.name 'linux-fieldwork-bot'
+          git config user.email '13091533+teamleaderleo@users.noreply.github.com'
+          git add "$lib" "$init" "$tests"
+          git commit -m 'Preserve explicit app intent for stub-named projects'
+          git push origin HEAD:fix/simple-stub-scaffold-current
