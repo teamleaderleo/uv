@@ -1,0 +1,33 @@
+name: Fieldwork 19671 app provenance discovery
+
+on:
+  pull_request:
+    branches:
+      - automation/19671-app-provenance-base-20260809
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Show init provenance ownership
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== InitSettings ==='
+          line=$(grep -n 'pub(crate) struct InitSettings' crates/uv/src/settings.rs | cut -d: -f1)
+          start=$((line-5)); end=$((line+150))
+          sed -n "${start},${end}p" crates/uv/src/settings.rs
+          echo '=== app_lib_kind ==='
+          line=$(grep -n 'app_lib_kind' crates/uv/src/settings.rs | head -1 | cut -d: -f1)
+          start=$((line-30)); end=$((line+100))
+          sed -n "${start},${end}p" crates/uv/src/settings.rs
+          echo '=== lib dispatch ==='
+          line=$(grep -n 'InitSettings::resolve' crates/uv/src/lib.rs | head -1 | cut -d: -f1)
+          start=$((line-25)); end=$((line+100))
+          sed -n "${start},${end}p" crates/uv/src/lib.rs
