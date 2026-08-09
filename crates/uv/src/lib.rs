@@ -2297,6 +2297,7 @@ async fn run_project(
                 args.path,
                 args.name,
                 args.kind,
+                args.explicit_app,
                 args.bare,
                 args.description,
                 args.no_description,

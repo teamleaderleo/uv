@@ -611,6 +611,130 @@ fn init_package_stubs_backends() -> Result<()> {
 }
 
 #[test]
+fn init_package_stubs_explicit_app_precedence() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    // No explicit application request: the conventional -stubs name still selects the
+    // simple stub scaffold.
+    for (dir, args) in [
+        ("stub-default", vec!["--name", "foo-stubs"]),
+        ("stub-package", vec!["--name", "foo-stubs", "--package"]),
+        ("stub-lib", vec!["--name", "foo-stubs", "--lib"]),
+    ] {
+        let mut command = context.init();
+        command.arg(dir);
+        for arg in args {
+            command.arg(arg);
+        }
+        let output = command.output()?;
+        assert!(
+            output.status.success(),
+            "{dir}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let child = context.temp_dir.child(dir);
+        child
+            .child("src/foo-stubs/__init__.pyi")
+            .assert(predicate::path::is_file());
+        child
+            .child("src/foo_stubs/__init__.py")
+            .assert(predicate::path::missing());
+    }
+
+    // Explicit --app outranks the naming heuristic and preserves the normal packaged
+    // application contract, including the runtime module and console script.
+    let app_dir = "runtime-app-stubs-name";
+    let output = context
+        .init()
+        .arg(app_dir)
+        .arg("--name")
+        .arg("foo-stubs")
+        .arg("--app")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let app = context.temp_dir.child(app_dir);
+    app.child("src/foo_stubs/__init__.py")
+        .assert(predicate::path::is_file());
+    app.child("src/foo-stubs/__init__.pyi")
+        .assert(predicate::path::missing());
+    let pyproject = fs_err::read_to_string(app.join("pyproject.toml"))?;
+    assert!(pyproject.contains("[project.scripts]"));
+    assert!(pyproject.contains("foo-stubs = \"foo_stubs:main\""));
+
+    // The same precedence applies when the selected backend implies packaging. Scikit
+    // therefore keeps its existing extension starter for an explicit application.
+    let scikit_dir = "runtime-app-stubs-name-scikit";
+    let output = context
+        .init()
+        .arg(scikit_dir)
+        .arg("--name")
+        .arg("foo-stubs")
+        .arg("--app")
+        .arg("--build-backend")
+        .arg("scikit")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let scikit = context.temp_dir.child(scikit_dir);
+    scikit
+        .child("CMakeLists.txt")
+        .assert(predicate::path::is_file());
+    scikit
+        .child("src/main.cpp")
+        .assert(predicate::path::is_file());
+    scikit
+        .child("src/foo_stubs/_core.pyi")
+        .assert(predicate::path::is_file());
+    scikit
+        .child("src/foo-stubs/__init__.pyi")
+        .assert(predicate::path::missing());
+    let pyproject = fs_err::read_to_string(scikit.join("pyproject.toml"))?;
+    assert!(pyproject.contains("pybind11>=3"));
+    assert!(pyproject.contains("[project.scripts]"));
+
+    // Maturin is rejected only for the inferred simple stub scaffold. Explicit --app
+    // keeps the existing Rust extension starter even when the distribution name ends
+    // in -stubs.
+    let maturin_dir = "runtime-app-stubs-name-maturin";
+    let output = context
+        .init()
+        .arg(maturin_dir)
+        .arg("--name")
+        .arg("foo-stubs")
+        .arg("--app")
+        .arg("--build-backend")
+        .arg("maturin")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let maturin = context.temp_dir.child(maturin_dir);
+    maturin
+        .child("Cargo.toml")
+        .assert(predicate::path::is_file());
+    maturin
+        .child("src/lib.rs")
+        .assert(predicate::path::is_file());
+    maturin
+        .child("src/foo_stubs/_core.pyi")
+        .assert(predicate::path::is_file());
+    maturin
+        .child("src/foo-stubs/__init__.pyi")
+        .assert(predicate::path::missing());
+
+    Ok(())
+}
+
+#[test]
 fn init_bare_lib() {
     let context = uv_test::test_context!("3.12");
 
