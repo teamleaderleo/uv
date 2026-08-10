@@ -29,7 +29,9 @@ use crate::implementation::ImplementationName;
 use crate::installation::{PythonInstallation, PythonInstallationKey};
 use crate::interpreter::Error as InterpreterError;
 use crate::interpreter::{StatusCodeError, UnexpectedResponseError};
-use crate::managed::{ManagedPythonInstallations, PythonMinorVersionLink};
+use crate::managed::{
+    ManagedPythonInstallation, ManagedPythonInstallations, PythonMinorVersionLink,
+};
 #[cfg(windows)]
 use crate::microsoft_store::find_microsoft_store_pythons;
 use crate::python_version::python_build_versions_from_env;
@@ -264,6 +266,9 @@ pub enum Error {
     /// current platform.
     #[error("Failed to discover managed Python installations")]
     ManagedPython(#[from] crate::managed::Error),
+
+    #[error("Managed Python installation at `{}` is still being finalized", _0.user_display())]
+    ManagedPythonInstallationInProgress(PathBuf),
 
     /// An error was encountered when inspecting a virtual environment.
     #[error(transparent)]
@@ -792,20 +797,29 @@ fn python_installation_from_executable(
     path: PathBuf,
     cache: &Cache,
 ) -> Result<PythonInstallation, Error> {
-    Interpreter::query(&path, cache)
-        .map(|interpreter| PythonInstallation {
-            source,
-            interpreter,
-        })
-        .inspect(|installation| {
-            debug!(
-                "Found `{}` at `{}` ({source})",
-                installation.key(),
-                path.display()
-            );
-        })
-        .map_err(|err| Error::Query(Box::new(err), path, source))
-        .inspect_err(|err| debug!("{err}"))
+    let interpreter = Interpreter::query(&path, cache)
+        .map_err(|err| Error::Query(Box::new(err), path.clone(), source))
+        .inspect_err(|err| debug!("{err}"))?;
+
+    if ManagedPythonInstallation::interpreter_is_in_progress(&interpreter)? {
+        let root = interpreter.sys_base_prefix().to_path_buf();
+        debug!(
+            "Skipping incomplete managed Python installation at `{}` discovered from {source}",
+            root.user_display()
+        );
+        return Err(Error::ManagedPythonInstallationInProgress(root));
+    }
+
+    let installation = PythonInstallation {
+        source,
+        interpreter,
+    };
+    debug!(
+        "Found `{}` at `{}` ({source})",
+        installation.key(),
+        path.display()
+    );
+    Ok(installation)
 }
 
 /// Convert Python executables into installations using the given query strategy.
@@ -993,6 +1007,13 @@ impl Error {
                     }
                 }
             },
+            Self::ManagedPythonInstallationInProgress(path) => {
+                trace!(
+                    "Skipping incomplete managed Python installation at {}",
+                    path.display()
+                );
+                false
+            }
             Self::VirtualEnv(VirtualEnvError::MissingPyVenvCfg(path)) => {
                 trace!("Skipping broken virtualenv at {}", path.display());
                 false
