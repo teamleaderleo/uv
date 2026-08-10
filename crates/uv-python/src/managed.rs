@@ -383,33 +383,37 @@ impl ManagedPythonInstallation {
         })
     }
 
-    /// Try to create a [`ManagedPythonInstallation`] from an [`Interpreter`].
-    ///
-    /// Returns `None` if the interpreter is not a managed installation.
-    pub fn try_from_interpreter(interpreter: &Interpreter) -> Option<Self> {
+    /// Return the managed installation path for an interpreter, if it belongs to uv's managed
+    /// root.
+    fn path_from_interpreter(interpreter: &Interpreter) -> Option<PathBuf> {
         let managed_root = ManagedPythonInstallations::from_settings(None).ok()?;
         let root = managed_root.absolute_root().ok()?;
 
         // Canonicalize both paths to handle Windows path format differences
         // (e.g., \\?\ prefix, different casing, junction vs actual path).
-        // Fall back to the original path if canonicalization fails (e.g., target doesn't exist).
         let sys_base_prefix = dunce::canonicalize(interpreter.sys_base_prefix())
             .unwrap_or_else(|_| interpreter.sys_base_prefix().to_path_buf());
         let root = dunce::canonicalize(&root).unwrap_or(root);
-
-        // Verify the interpreter's base prefix is within the managed root
         let suffix = sys_base_prefix.strip_prefix(&root).ok()?;
-
         let first_component = suffix.components().next()?;
         let name = first_component.as_os_str().to_str()?;
-
-        // Verify it's a valid installation key
         PythonInstallationKey::from_str(name).ok()?;
+        Some(root.join(name))
+    }
 
-        // Construct the installation from the path within the managed root. Refuse
-        // marker-bearing (or unreadable) paths here too: this reconstruction path can be reached
-        // from an already-discovered interpreter without going through `find_all()`.
-        let path = root.join(name);
+    /// Return whether an interpreter belongs to a published but incomplete managed installation.
+    pub(crate) fn interpreter_is_in_progress(interpreter: &Interpreter) -> Result<bool, Error> {
+        let Some(path) = Self::path_from_interpreter(interpreter) else {
+            return Ok(false);
+        };
+        installation_is_in_progress(&path)
+    }
+
+    /// Try to create a [`ManagedPythonInstallation`] from an [`Interpreter`].
+    ///
+    /// Returns `None` if the interpreter is not a managed installation.
+    pub fn try_from_interpreter(interpreter: &Interpreter) -> Option<Self> {
+        let path = Self::path_from_interpreter(interpreter)?;
         if installation_is_in_progress(&path).ok()? {
             return None;
         }
