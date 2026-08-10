@@ -1,0 +1,55 @@
+name: fieldwork-309-run-cross-source-bootstrap
+
+on:
+  pull_request:
+    branches:
+      - fix/hide-incomplete-managed-python-installations
+    paths:
+      - '.github/workflows/fieldwork-309-publish-cross-source-variant.yml'
+      - '.github/workflows/fieldwork-309-run-cross-source-bootstrap.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'fix/hide-incomplete-managed-python-installations-cross-source'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/hide-incomplete-managed-python-installations-cross-source
+          fetch-depth: 2
+
+      - name: Verify and apply reviewed prototype
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^^)" = "8525cfc69e561adc0b4f71c2c1f02ae457b37b7c"
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('.github/workflows/fieldwork-309-publish-cross-source-variant.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(src) if "cat > /tmp/fieldwork-309.patch <<'PATCH'" in line) + 1
+          end = next(i for i in range(start, len(src)) if src[i].strip() == 'PATCH')
+          lines = []
+          for line in src[start:end]:
+              assert line.startswith('          '), repr(line)
+              lines.append(line[10:])
+          Path('/tmp/fieldwork-309.patch').write_text('\n'.join(lines) + '\n')
+          PY
+          git apply --check /tmp/fieldwork-309.patch
+          git apply /tmp/fieldwork-309.patch
+          cargo fmt --all
+          git diff --check
+
+      - name: Push product-only variant
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/fieldwork-309-publish-cross-source-variant.yml
+          rm .github/workflows/fieldwork-309-run-cross-source-bootstrap.yml
+          git config user.name "teamleaderleo"
+          git config user.email "13091533+teamleaderleo@users.noreply.github.com"
+          git add crates/uv-python/src/discovery.rs crates/uv-python/src/managed.rs .github/workflows/fieldwork-309-publish-cross-source-variant.yml .github/workflows/fieldwork-309-run-cross-source-bootstrap.yml
+          git commit -m "fix: hide incomplete managed Python across discovery sources"
+          git push origin HEAD:fix/hide-incomplete-managed-python-installations-cross-source
