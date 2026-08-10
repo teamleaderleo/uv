@@ -19,13 +19,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: fix/hide-incomplete-managed-python-installations-cross-source
-          fetch-depth: 3
+          fetch-depth: 1
 
       - name: Verify and apply reviewed prototype
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^^^)" = "8525cfc69e561adc0b4f71c2c1f02ae457b37b7c"
+          git fetch --no-tags --depth=1 origin 8525cfc69e561adc0b4f71c2c1f02ae457b37b7c
+          git diff --exit-code 8525cfc69e561adc0b4f71c2c1f02ae457b37b7c HEAD -- \
+            crates/uv-python/src/discovery.rs \
+            crates/uv-python/src/managed.rs \
+            crates/uv-python/src/downloads.rs \
+            crates/uv-python/src/installation.rs \
+            crates/uv/src/commands/python/install.rs
           python - <<'PY'
           from pathlib import Path
           src = Path('.github/workflows/fieldwork-309-publish-cross-source-variant.yml').read_text().splitlines()
