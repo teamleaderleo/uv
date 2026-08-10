@@ -45,6 +45,7 @@ jobs:
           PY
           git apply --check /tmp/fieldwork-309.patch
           git apply /tmp/fieldwork-309.patch
+          rustup component add --toolchain 1.97.1-x86_64-unknown-linux-gnu rustfmt
           cargo fmt --all
           git diff --check
 
