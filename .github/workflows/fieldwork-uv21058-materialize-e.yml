@@ -20,6 +20,9 @@ jobs:
           ref: fieldwork/upstream-95637-diagnostics
           fetch-depth: 0
 
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+
       - name: Create scoped diagnostic branch
         shell: bash
         run: |
