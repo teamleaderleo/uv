@@ -99,7 +99,7 @@ fn tool_upgrade_all_reports_invalid_tool_directory_name() -> Result<()> {
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
         .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 2
+    exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to inspect installed tools
       Caused by: Invalid tool directory name: `[TEMP_DIR]/tools/tool backup`
