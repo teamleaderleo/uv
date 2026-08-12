@@ -265,7 +265,7 @@ impl InstalledTools {
         let environment_path = self.tool_dir(name);
 
         debug!(
-            "Deleting environment for tool `{name}`: {}",
+            "Deleting environment for tool `{name}` at {}",
             environment_path.user_display()
         );
 
@@ -432,7 +432,7 @@ pub fn entrypoint_paths(
     package_name: &PackageName,
     package_version: &Version,
 ) -> Result<Vec<(String, PathBuf)>, Error> {
-    // Find the `.dist-info` directory for a package in an environment.
+    // Find the `.dist-info` directory in the installed environment.
     let dist_info_path = find_dist_info(site_packages, package_name, package_version)?;
     debug!(
         "Looking at `.dist-info` at: {}",
