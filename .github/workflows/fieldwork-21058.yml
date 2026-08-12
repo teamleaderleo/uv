@@ -1,0 +1,83 @@
+name: fieldwork-21058
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Apply prototype
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          upgrade = Path("crates/uv/src/commands/tool/upgrade.rs")
+          text = upgrade.read_text()
+          marker = "/// Upgrade a tool.\n"
+          insertion = '''#[derive(Debug, thiserror::Error)]
+          #[error("Failed to enumerate installed tools")]
+          pub(crate) struct ToolEnumerationError {
+              #[source]
+              source: uv_tool::Error,
+          }
+
+          impl uv_errors::Hint for ToolEnumerationError {
+              fn hints(&self) -> uv_errors::Hints<'_> {
+                  if matches!(&self.source, uv_tool::Error::ToolName(_)) {
+                      uv_errors::Hints::from(
+                          "Move or remove the invalid directory from the uv tool directory; run `uv tool dir` to locate it",
+                      )
+                  } else {
+                      uv_errors::Hints::none()
+                  }
+              }
+          }
+
+          '''
+          assert marker in text
+          text = text.replace(marker, insertion + marker, 1)
+          old = '''installed_tools
+                          .tools()
+                          .unwrap_or_default()'''
+          new = '''installed_tools
+                          .tools()
+                          .map_err(|source| ToolEnumerationError { source })?'''
+          assert old in text
+          upgrade.write_text(text.replace(old, new, 1))
+
+          tool_mod = Path("crates/uv/src/commands/tool/mod.rs")
+          text = tool_mod.read_text()
+          old = "mod upgrade;\n"
+          new = old + "pub(crate) use upgrade::ToolEnumerationError;\n"
+          assert old in text
+          tool_mod.write_text(text.replace(old, new, 1))
+
+          diagnostics = Path("crates/uv/src/commands/diagnostics.rs")
+          text = diagnostics.read_text()
+          old = "use crate::commands::tool::run::ToolRunScriptError;\n"
+          new = old + "use crate::commands::tool::ToolEnumerationError;\n"
+          assert old in text
+          text = text.replace(old, new, 1)
+          old = "        collect_hint::<ToolRunScriptError>(cause, &mut hints);\n"
+          new = old + "        collect_hint::<ToolEnumerationError>(cause, &mut hints);\n"
+          assert old in text
+          diagnostics.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Show Python
+        run: python3.12 --version
+
+      - name: Run tool-upgrade regression
+        run: >-
+          cargo test --locked -p uv --test tool
+          --no-default-features --features test-python,test-pypi
+          tool_upgrade_all_ignores_invalid_tool_name -- --nocapture
