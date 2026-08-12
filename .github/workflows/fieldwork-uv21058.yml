@@ -1,0 +1,113 @@
+name: Fieldwork uv21058 thunderdome
+
+on:
+  push:
+    branches:
+      - fieldwork/uv21058-thunderdome-runner
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - name: A command-local
+            ref: fieldwork/uv21058-a-command-local
+          - name: C root-path local
+            ref: fieldwork/uv21058-c-root-path-hint
+          - name: B2 path + outer context
+            ref: fieldwork/uv21058-b-shared-path-hint
+          - name: B1 path context only
+            ref: fieldwork/uv21058-b1-path-context
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          prefix-key: fieldwork-uv21058
+          key: ${{ matrix.name }}
+
+      - name: Build uv
+        run: cargo build -p uv --bin uv --no-default-features
+
+      - name: Invalid tool-directory name
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          mkdir "$tmp/tool backup"
+          set +e
+          output="$(UV_TOOL_DIR="$tmp" target/debug/uv tool upgrade --all 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          printf 'exit: %s\n' "$status"
+          {
+            echo '### Invalid tool-directory name'
+            echo '```text'
+            printf '%s\n' "$output"
+            printf 'exit: %s\n' "$status"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$status" -eq 2
+          grep -q 'Not a valid package or extra name: "tool backup"' <<< "$output"
+          ! grep -q 'Nothing to upgrade' <<< "$output"
+
+      - name: Empty tool directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          set +e
+          output="$(UV_TOOL_DIR="$tmp" target/debug/uv tool upgrade --all 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          printf 'exit: %s\n' "$status"
+          {
+            echo '### Empty tool directory'
+            echo '```text'
+            printf '%s\n' "$output"
+            printf 'exit: %s\n' "$status"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$status" -eq 0
+          grep -q '^Nothing to upgrade$' <<< "$output"
+
+      - name: Receipt read I/O error
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          mkdir -p "$tmp/ruff/uv-receipt.toml"
+          set +e
+          output="$(UV_TOOL_DIR="$tmp" target/debug/uv tool upgrade --all 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          printf 'exit: %s\n' "$status"
+          {
+            echo '### Receipt read I/O error'
+            echo '```text'
+            printf '%s\n' "$output"
+            printf 'exit: %s\n' "$status"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$status" -eq 2
+          ! grep -q 'Nothing to upgrade' <<< "$output"
+          ! grep -q '^hint:' <<< "$output"
