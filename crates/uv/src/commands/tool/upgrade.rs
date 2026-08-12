@@ -23,7 +23,7 @@ use uv_python::{
 };
 use uv_requirements::RequirementsSpecification;
 use uv_settings::{Combine, PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
-use uv_tool::{InstalledTools, Tool};
+use uv_tool::{Error as ToolError, InstalledTools, Tool};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
@@ -65,9 +65,26 @@ pub(crate) async fn upgrade(
     // Collect the tools to upgrade, along with any constraints.
     let names: BTreeMap<PackageName, Vec<Requirement>> = {
         if names.is_empty() {
-            installed_tools
-                .tools()
-                .unwrap_or_default()
+            let tools = match installed_tools.tools() {
+                Ok(tools) => tools,
+                Err(err) => {
+                    let hints = if matches!(&err, ToolError::ToolName(_)) {
+                        Hints::from(
+                            "Run `uv tool dir` to locate the tool directory, then move, rename, or remove the invalid directory",
+                        )
+                    } else {
+                        Hints::none()
+                    };
+                    let err = anyhow::Error::new(err).context("Failed to enumerate installed tools");
+                    write_error_chain_with_options(
+                        err.as_ref(),
+                        hints,
+                        ErrorOptions::default().with_stream(printer.stderr()),
+                    )?;
+                    return Ok(ExitStatus::Error);
+                }
+            };
+            tools
                 .into_iter()
                 .map(|(name, _)| (name, Vec::new()))
                 .collect()
