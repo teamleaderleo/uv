@@ -111,3 +111,45 @@ jobs:
           test "$status" -eq 2
           ! grep -q 'Nothing to upgrade' <<< "$output"
           ! grep -q '^hint:' <<< "$output"
+
+      - name: Sibling tool commands on invalid directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          mkdir "$tmp/tool backup"
+
+          run_and_record() {
+            label="$1"
+            shift
+            set +e
+            output="$(UV_TOOL_DIR="$tmp" "$@" 2>&1)"
+            status=$?
+            set -e
+            printf '\n== %s ==\n%s\nexit: %s\n' "$label" "$output" "$status"
+            {
+              echo "### $label"
+              echo '```text'
+              printf '%s\n' "$output"
+              printf 'exit: %s\n' "$status"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            LAST_OUTPUT="$output"
+            LAST_STATUS="$status"
+          }
+
+          run_and_record 'uv tool dir' target/debug/uv tool dir
+          test "$LAST_STATUS" -eq 0
+          test "$LAST_OUTPUT" = "$tmp"
+
+          run_and_record 'uv tool list' target/debug/uv tool list
+          test "$LAST_STATUS" -eq 2
+          grep -q 'Not a valid package or extra name: "tool backup"' <<< "$LAST_OUTPUT"
+
+          run_and_record 'uv tool uninstall --all' target/debug/uv tool uninstall --all
+          test "$LAST_STATUS" -eq 2
+          grep -q 'Not a valid package or extra name: "tool backup"' <<< "$LAST_OUTPUT"
+
+          run_and_record 'uv --preview tool audit --all' target/debug/uv --preview tool audit --all
+          test "$LAST_STATUS" -eq 2
+          grep -q 'Not a valid package or extra name: "tool backup"' <<< "$LAST_OUTPUT"
