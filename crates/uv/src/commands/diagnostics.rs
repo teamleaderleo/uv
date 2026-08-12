@@ -248,6 +248,7 @@ pub(crate) fn hints_for_error(err: &anyhow::Error) -> Hints<'static> {
         collect_hint::<uv_build_backend::Error>(cause, &mut hints);
         collect_hint::<uv_build_frontend::Error>(cause, &mut hints);
         collect_hint::<uv_python::Error>(cause, &mut hints);
+        collect_hint::<uv_tool::Error>(cause, &mut hints);
         collect_hint::<uv_installer::IncompatibleWheelError>(cause, &mut hints);
         collect_hint::<uv_distribution::Error>(cause, &mut hints);
         collect_hint::<uv_python::BrokenLink>(cause, &mut hints);
