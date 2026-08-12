@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
@@ -67,7 +67,7 @@ pub(crate) async fn upgrade(
         if names.is_empty() {
             installed_tools
                 .tools()
-                .unwrap_or_default()
+                .context("Failed to enumerate installed tools")?
                 .into_iter()
                 .map(|(name, _)| (name, Vec::new()))
                 .collect()
@@ -277,7 +277,6 @@ async fn upgrade_tool(
     preview: Preview,
 ) -> Result<UpgradeReport> {
     let tool_locks = preview.is_enabled(PreviewFeature::ToolInstallLocks);
-    // Ensure the tool is installed.
     let existing_tool_receipt = match installed_tools.get_tool_receipt(name) {
         Ok(Some(receipt)) => receipt,
         Ok(None) => {
@@ -318,7 +317,6 @@ async fn upgrade_tool(
         }
     };
 
-    // Resolve the appropriate settings, preferring: CLI > receipt > user.
     let options = args.clone().combine(
         ResolverInstallerOptions::from(existing_tool_receipt.options().clone())
             .combine(filesystem.clone()),
@@ -345,22 +343,16 @@ async fn upgrade_tool(
         &settings.resolver.dependency_metadata,
     );
 
-    // Resolve the requirements.
     let spec = RequirementsSpecification::from_excludes(
         existing_tool_receipt.requirements().to_vec(),
         manifest_constraints,
         manifest_overrides,
         manifest_excludes,
     );
-    // Initialize any shared state.
     let state = PlatformState::default();
-    // Check if we need to create a new environment — if so, resolve it first, then install the
-    // requested tool.
     let requested_interpreter =
         interpreter.filter(|interpreter| !environment.environment().uses(interpreter));
     let tool_dir = installed_tools.tool_dir(name);
-    // TODO(zanieb): When updating an existing environment, build it in the cache directory then
-    // copy it into the tool directory.
     let (environment, outcome, tool_lock) = if tool_locks {
         let target_interpreter =
             requested_interpreter.unwrap_or_else(|| environment.environment().interpreter());
@@ -423,7 +415,6 @@ async fn upgrade_tool(
                 Some(tool_lock),
             )
         } else {
-            // Otherwise, upgrade the existing environment.
             let ResolverInstallerSettings {
                 resolver:
                     crate::settings::ResolverSettings {
@@ -532,7 +523,6 @@ async fn upgrade_tool(
         .await?;
         (environment, UpgradeOutcome::UpgradeEnvironment, None)
     } else {
-        // Otherwise, upgrade the existing environment.
         let EnvironmentUpdate {
             environment,
             changelog,
@@ -574,8 +564,6 @@ async fn upgrade_tool(
         outcome,
         UpgradeOutcome::UpgradeEnvironment | UpgradeOutcome::UpgradeTool
     ) {
-        // At this point, we updated the existing environment, so we should remove any of its
-        // existing executables.
         remove_entrypoints(&existing_tool_receipt);
 
         let entrypoints: Vec<_> = existing_tool_receipt
@@ -584,7 +572,6 @@ async fn upgrade_tool(
             .filter_map(|entry| PackageName::from_str(entry.from.as_ref()?).ok())
             .collect();
 
-        // If we modified the target tool, reinstall the entrypoints.
         finalize_tool_install(
             &environment,
             name,

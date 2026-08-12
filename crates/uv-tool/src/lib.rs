@@ -78,6 +78,12 @@ pub enum Error {
     NoExecutableDirectory,
     #[error(transparent)]
     ToolName(#[from] InvalidNameError),
+    #[error("Invalid tool directory at `{}`", path.user_display())]
+    InvalidToolDirectory {
+        path: PathBuf,
+        #[source]
+        source: InvalidNameError,
+    },
     #[error(transparent)]
     EnvironmentError(#[from] uv_python::Error),
     #[error("Failed to find a receipt for tool `{0}` at {1}")]
@@ -102,11 +108,24 @@ impl Error {
             | Self::EntrypointRead(_)
             | Self::NoExecutableDirectory
             | Self::ToolName(_)
+            | Self::InvalidToolDirectory { .. }
             | Self::EnvironmentError(_)
             | Self::MissingToolReceipt(_, _)
             | Self::EnvironmentRead(_, _)
             | Self::MissingToolPackage(_)
             | Self::ToolEnvironmentNotFound(_, _) => None,
+        }
+    }
+}
+
+impl uv_errors::Hint for Error {
+    fn hints(&self) -> uv_errors::Hints<'_> {
+        match self {
+            Self::InvalidToolDirectory { path, .. } => uv_errors::Hints::from(format!(
+                "Move, rename, or remove the invalid tool directory at `{}`",
+                path.user_display()
+            )),
+            _ => uv_errors::Hints::none(),
         }
     }
 }
@@ -162,7 +181,10 @@ impl InstalledTools {
             else {
                 continue;
             };
-            let name = PackageName::from_str(name)?;
+            let name = PackageName::from_str(name).map_err(|source| Error::InvalidToolDirectory {
+                path: directory.clone(),
+                source,
+            })?;
             let path = directory.join("uv-receipt.toml");
             let contents = match fs_err::read_to_string(&path) {
                 Ok(contents) => contents,
@@ -322,7 +344,7 @@ impl InstalledTools {
     ) -> Result<PythonEnvironment, Error> {
         let environment_path = self.tool_dir(name);
 
-        // Remove any existing environment.
+        // Remove the existing environment.
         match uv_fs::remove_virtualenv(&environment_path) {
             Ok(()) => {
                 debug!(
