@@ -87,23 +87,27 @@ fn tool_upgrade_empty() {
 }
 
 #[test]
-fn tool_upgrade_all_ignores_invalid_tool_name() -> Result<()> {
+fn tool_upgrade_all_reports_invalid_tool_directory_name() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
     tool_dir.child("tool backup").create_dir_all()?;
 
-    // Silently treating an enumeration error as an empty tool directory hides a broken
-    // installation and exits successfully; see astral-sh/uv#21058.
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--all")
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
         .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
+    exit_code: 2
     ----- stderr -----
-    Nothing to upgrade
+    error: Failed to inspect installed tools
+      Caused by: Invalid tool directory name: `[TEMP_DIR]/tools/tool backup`
+      Caused by: Not a valid package or extra name: \"tool backup\". Names must start and end with
+                 a letter or digit and may only contain -, _, ., and alphanumeric characters.
+
+    hint: Move the invalid directory at `[TEMP_DIR]/tools/tool backup` outside the uv tool directory,
+          or remove it
     ");
 
     Ok(())

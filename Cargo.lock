@@ -7589,6 +7589,7 @@ dependencies = [
  "uv-configuration",
  "uv-dirs",
  "uv-distribution-types",
+ "uv-errors",
  "uv-fs",
  "uv-install-wheel",
  "uv-installer",

@@ -76,10 +76,8 @@ pub enum Error {
     EntrypointRead(#[from] uv_install_wheel::Error),
     #[error("Failed to find a directory to install executables into")]
     NoExecutableDirectory,
-    #[error(transparent)]
-    ToolName(#[from] InvalidNameError),
-    #[error("Invalid tool directory at `{}`", path.user_display())]
-    InvalidToolDirectory {
+    #[error("Invalid tool directory name: `{}`", path.user_display())]
+    InvalidToolDirectoryName {
         path: PathBuf,
         #[source]
         source: InvalidNameError,
@@ -107,8 +105,7 @@ impl Error {
             | Self::VirtualEnvError(_)
             | Self::EntrypointRead(_)
             | Self::NoExecutableDirectory
-            | Self::ToolName(_)
-            | Self::InvalidToolDirectory { .. }
+            | Self::InvalidToolDirectoryName { .. }
             | Self::EnvironmentError(_)
             | Self::MissingToolReceipt(_, _)
             | Self::EnvironmentRead(_, _)
@@ -121,8 +118,8 @@ impl Error {
 impl uv_errors::Hint for Error {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
-            Self::InvalidToolDirectory { path, .. } => uv_errors::Hints::from(format!(
-                "Move, rename, or remove the invalid tool directory at `{}`",
+            Self::InvalidToolDirectoryName { path, .. } => uv_errors::Hints::from(format!(
+                "Move the invalid directory at `{}` outside the uv tool directory, or remove it",
                 path.user_display()
             )),
             _ => uv_errors::Hints::none(),
@@ -181,10 +178,11 @@ impl InstalledTools {
             else {
                 continue;
             };
-            let name = PackageName::from_str(name).map_err(|source| Error::InvalidToolDirectory {
-                path: directory.clone(),
-                source,
-            })?;
+            let name =
+                PackageName::from_str(name).map_err(|source| Error::InvalidToolDirectoryName {
+                    path: directory.clone(),
+                    source,
+                })?;
             let path = directory.join("uv-receipt.toml");
             let contents = match fs_err::read_to_string(&path) {
                 Ok(contents) => contents,
