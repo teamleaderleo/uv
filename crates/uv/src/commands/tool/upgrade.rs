@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
@@ -67,7 +67,7 @@ pub(crate) async fn upgrade(
         if names.is_empty() {
             installed_tools
                 .tools()
-                .unwrap_or_default()
+                .context("Failed to enumerate installed tools")?
                 .into_iter()
                 .map(|(name, _)| (name, Vec::new()))
                 .collect()
