@@ -9,6 +9,7 @@ use uv_distribution_types::{
     DerivationChain, DerivationStep, Dist, DistErrorKind, Name, RequestedDist,
 };
 use uv_errors::{Hint, Hints};
+use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::{Version, strip_local_version_sentinels};
 
@@ -36,6 +37,38 @@ static SUGGESTIONS: LazyLock<FxHashMap<PackageName, PackageName>> = LazyLock::ne
         })
         .collect()
 });
+
+/// Add command context and recovery guidance to failures while inspecting installed tools.
+#[derive(Debug, thiserror::Error)]
+#[error("Failed to inspect installed tools")]
+pub(crate) struct ToolInventoryError {
+    invalid_name_root: Option<std::path::PathBuf>,
+    #[source]
+    source: uv_tool::Error,
+}
+
+impl ToolInventoryError {
+    pub(crate) fn new(root: &std::path::Path, source: uv_tool::Error) -> Self {
+        let invalid_name_root =
+            matches!(&source, uv_tool::Error::ToolName(_)).then(|| root.to_path_buf());
+        Self {
+            invalid_name_root,
+            source,
+        }
+    }
+}
+
+impl Hint for ToolInventoryError {
+    fn hints(&self) -> Hints<'_> {
+        let Some(root) = self.invalid_name_root.as_ref() else {
+            return Hints::none();
+        };
+        Hints::from(format!(
+            "Inspect the uv tool directory at `{}`; move the invalid directory outside it, or remove it",
+            root.user_display()
+        ))
+    }
+}
 
 /// A rich reporter for operational diagnostics, i.e., errors that occur during resolution and
 /// installation.
@@ -231,6 +264,7 @@ pub(crate) fn write_error_chain(err: &anyhow::Error, printer: Printer) -> std::f
 pub(crate) fn hints_for_error(err: &anyhow::Error) -> Hints<'static> {
     let mut hints = Hints::none();
     for cause in err.chain() {
+        collect_hint::<ToolInventoryError>(cause, &mut hints);
         collect_hint::<Box<uv_resolver::NoSolutionError>>(cause, &mut hints);
         collect_hint::<uv_resolver::NoSolutionError>(cause, &mut hints);
         collect_hint::<uv_resolver::ResolveError>(cause, &mut hints);

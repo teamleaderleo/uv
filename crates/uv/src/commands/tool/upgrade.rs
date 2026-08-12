@@ -27,6 +27,7 @@ use uv_tool::{InstalledTools, Tool};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
+use crate::commands::diagnostics::ToolInventoryError;
 use crate::commands::pip::loggers::{
     DefaultInstallLogger, SummaryResolveLogger, UpgradeInstallLogger,
 };
@@ -67,7 +68,7 @@ pub(crate) async fn upgrade(
         if names.is_empty() {
             installed_tools
                 .tools()
-                .unwrap_or_default()
+                .map_err(|err| ToolInventoryError::new(installed_tools.root(), err))?
                 .into_iter()
                 .map(|(name, _)| (name, Vec::new()))
                 .collect()
