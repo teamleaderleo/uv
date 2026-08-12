@@ -1,0 +1,57 @@
+diff --git a/crates/uv/src/commands/tool/upgrade.rs b/crates/uv/src/commands/tool/upgrade.rs
+index 5f954b2ce..000000000 100644
+--- a/crates/uv/src/commands/tool/upgrade.rs
++++ b/crates/uv/src/commands/tool/upgrade.rs
+@@ -40,6 +40,25 @@ use crate::commands::{ExitStatus, conjunction, tool::common::finalize_tool_install};
+ use crate::printer::Printer;
+ use crate::settings::ResolverInstallerSettings;
+ 
++#[derive(Debug, thiserror::Error)]
++#[error("Failed to enumerate installed tools")]
++pub(crate) struct ToolEnumerationError {
++    #[source]
++    source: uv_tool::Error,
++}
++
++impl uv_errors::Hint for ToolEnumerationError {
++    fn hints(&self) -> uv_errors::Hints<'_> {
++        if matches!(&self.source, uv_tool::Error::ToolName(_)) {
++            uv_errors::Hints::from(
++                "Move or remove the invalid directory from the uv tool directory; run `uv tool dir` to locate it",
++            )
++        } else {
++            uv_errors::Hints::none()
++        }
++    }
++}
++
+ /// Upgrade a tool.
+ pub(crate) async fn upgrade(
+@@ -67,8 +86,7 @@ pub(crate) async fn upgrade(
+         if names.is_empty() {
+             installed_tools
+                 .tools()
+-                .unwrap_or_default()
++                .map_err(|source| ToolEnumerationError { source })?
+                 .into_iter()
+                 .map(|(name, _)| (name, Vec::new()))
+                 .collect()
+diff --git a/crates/uv/src/commands/diagnostics.rs b/crates/uv/src/commands/diagnostics.rs
+index e70a50231..000000000 100644
+--- a/crates/uv/src/commands/diagnostics.rs
++++ b/crates/uv/src/commands/diagnostics.rs
+@@ -20,6 +20,7 @@ use crate::commands::project::version::MissingProjectVersionError;
+ use crate::commands::tool::common::NoExecutablesError;
+ use crate::commands::tool::run::ToolRunScriptError;
++use crate::commands::tool::upgrade::ToolEnumerationError;
+ use crate::printer::Printer;
+ 
+ static SUGGESTIONS: LazyLock<FxHashMap<PackageName, PackageName>> = LazyLock::new(|| {
+@@ -224,6 +225,7 @@ pub(crate) fn hints_for_error(err: &anyhow::Error) -> Hints<'static> {
+         collect_hint::<uv_resolver::LockError>(cause, &mut hints);
+         collect_hint::<pip::operations::Error>(cause, &mut hints);
+         collect_hint::<ToolRunScriptError>(cause, &mut hints);
++        collect_hint::<ToolEnumerationError>(cause, &mut hints);
+         collect_hint::<RecursionLimitError>(cause, &mut hints);
+         collect_hint::<DependencyNotFoundError>(cause, &mut hints);
+         collect_hint::<ExtrasWithoutSourceError>(cause, &mut hints);
