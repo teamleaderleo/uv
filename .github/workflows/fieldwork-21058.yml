@@ -1,0 +1,27 @@
+name: fieldwork-21058
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Apply prototype
+        run: git apply fieldwork/21058-command-error-hint.patch
+
+      - name: Show Python
+        run: python3.12 --version
+
+      - name: Run tool-upgrade regression
+        run: >-
+          cargo test --locked -p uv --test tool
+          --no-default-features --features test-python,test-pypi
+          tool_upgrade_all_ignores_invalid_tool_name -- --nocapture
