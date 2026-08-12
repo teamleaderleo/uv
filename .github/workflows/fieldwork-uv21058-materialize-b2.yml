@@ -1,0 +1,92 @@
+name: Fieldwork materialize uv21058 B2
+
+on:
+  push:
+    branches:
+      - fieldwork/uv21058-thunderdome-runner
+    paths:
+      - .github/workflows/fieldwork-uv21058-materialize-b2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fieldwork/uv21058-b-shared-path-hint
+          fetch-depth: 0
+
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+
+      - name: Create polished shared diagnostic branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git switch -C fieldwork/uv21058-b2-polished
+          python - <<'PY'
+          from pathlib import Path
+
+          tool = Path("crates/uv-tool/src/lib.rs")
+          text = tool.read_text()
+          text = text.replace(
+              '    #[error(transparent)]\n    ToolName(#[from] InvalidNameError),\n',
+              '',
+              1,
+          )
+          text = text.replace(
+              '#[error("Invalid tool directory at `{}`", path.user_display())]\n    InvalidToolDirectory {',
+              '#[error("Invalid tool directory name: `{}`", path.user_display())]\n    InvalidToolDirectoryName {',
+              1,
+          )
+          text = text.replace('Self::ToolName(_)\n            | ', '', 1)
+          text = text.replace('Self::InvalidToolDirectory { .. }', 'Self::InvalidToolDirectoryName { .. }')
+          text = text.replace(
+              'Self::InvalidToolDirectory { path, .. } => uv_errors::Hints::from(format!(\n                "Move, rename, or remove the invalid tool directory at `{}`",\n                path.user_display()\n            )),',
+              'Self::InvalidToolDirectoryName { path, .. } => uv_errors::Hints::from(format!(\n                "Move the invalid directory at `{}` outside the uv tool directory, or remove it",\n                path.user_display()\n            )),',
+              1,
+          )
+          text = text.replace('Error::InvalidToolDirectory {', 'Error::InvalidToolDirectoryName {')
+          tool.write_text(text)
+
+          upgrade = Path("crates/uv/src/commands/tool/upgrade.rs")
+          text = upgrade.read_text().replace(
+              'Failed to enumerate installed tools',
+              'Failed to inspect installed tools',
+              1,
+          )
+          upgrade.write_text(text)
+
+          lock = Path("Cargo.lock")
+          text = lock.read_text()
+          start = text.index('[[package]]\nname = "uv-tool"\n')
+          end = text.index('\n[[package]]', start + 1)
+          block = text[start:end]
+          if ' "uv-errors",\n' not in block:
+              block = block.replace(' "uv-distribution-types",\n', ' "uv-distribution-types",\n "uv-errors",\n', 1)
+          text = text[:start] + block + text[end:]
+          lock.write_text(text)
+
+          test = Path("crates/uv/tests/tool/tool_upgrade.rs")
+          text = test.read_text()
+          text = text.replace(
+              'fn tool_upgrade_all_ignores_invalid_tool_name() -> Result<()> {',
+              'fn tool_upgrade_all_reports_invalid_tool_directory_name() -> Result<()> {',
+              1,
+          )
+          old = '''    // Silently treating an enumeration error as an empty tool directory hides a broken\n    // installation and exits successfully; see astral-sh/uv#21058.\n    uv_snapshot!(context.filters(), context.tool_upgrade()\n        .arg("--all")\n        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())\n        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())\n        .env(EnvVars::PATH, bin_dir.as_os_str()), @"\n    exit_code: 0 (success)\n    ----- stderr -----\n    Nothing to upgrade\n    ");\n'''
+          new = '''    uv_snapshot!(context.filters(), context.tool_upgrade()\n        .arg("--all")\n        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())\n        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())\n        .env(EnvVars::PATH, bin_dir.as_os_str()), @"\n    exit_code: 2\n    ----- stderr -----\n    error: Failed to inspect installed tools\n      Caused by: Invalid tool directory name: `[TEMP_DIR]/tools/tool backup`\n      Caused by: Not a valid package or extra name: "tool backup". Names must start and end with\n                 a letter or digit and may only contain -, _, ., and alphanumeric characters.\n\n    hint: Move the invalid directory at `[TEMP_DIR]/tools/tool backup` outside the uv tool directory,\n          or remove it\n    ");\n'''
+          if old not in text:
+              raise SystemExit("upstream regression block not found")
+          test.write_text(text.replace(old, new, 1))
+          PY
+
+          cargo fmt --all
+          git diff --check
+          git add Cargo.lock crates/uv-tool/Cargo.toml crates/uv-tool/src/lib.rs crates/uv/src/commands/diagnostics.rs crates/uv/src/commands/tool/upgrade.rs crates/uv/tests/tool/tool_upgrade.rs
+          git -c user.name='fieldwork-rd' -c user.email='fieldwork-rd@users.noreply.github.com' commit -m 'Polish shared tool inventory diagnostic'
+          git push --force-with-lease origin fieldwork/uv21058-b2-polished
