@@ -76,8 +76,12 @@ pub enum Error {
     EntrypointRead(#[from] uv_install_wheel::Error),
     #[error("Failed to find a directory to install executables into")]
     NoExecutableDirectory,
-    #[error(transparent)]
-    ToolName(#[from] InvalidNameError),
+    #[error("Invalid tool directory at `{path}`")]
+    ToolName {
+        path: PathBuf,
+        #[source]
+        source: InvalidNameError,
+    },
     #[error(transparent)]
     EnvironmentError(#[from] uv_python::Error),
     #[error("Failed to find a receipt for tool `{0}` at {1}")]
@@ -101,12 +105,24 @@ impl Error {
             | Self::VirtualEnvError(_)
             | Self::EntrypointRead(_)
             | Self::NoExecutableDirectory
-            | Self::ToolName(_)
+            | Self::ToolName { .. }
             | Self::EnvironmentError(_)
             | Self::MissingToolReceipt(_, _)
             | Self::EnvironmentRead(_, _)
             | Self::MissingToolPackage(_)
             | Self::ToolEnvironmentNotFound(_, _) => None,
+        }
+    }
+}
+
+impl uv_errors::Hint for Error {
+    fn hints(&self) -> uv_errors::Hints<'_> {
+        match self {
+            Self::ToolName { path, .. } => uv_errors::Hints::from(format!(
+                "Move, rename, or remove the invalid tool directory at `{}`",
+                path.user_display()
+            )),
+            _ => uv_errors::Hints::none(),
         }
     }
 }
@@ -162,7 +178,10 @@ impl InstalledTools {
             else {
                 continue;
             };
-            let name = PackageName::from_str(name)?;
+            let name = PackageName::from_str(name).map_err(|source| Error::ToolName {
+                path: directory.clone(),
+                source,
+            })?;
             let path = directory.join("uv-receipt.toml");
             let contents = match fs_err::read_to_string(&path) {
                 Ok(contents) => contents,

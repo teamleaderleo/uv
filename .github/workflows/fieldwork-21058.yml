@@ -1,0 +1,50 @@
+name: fieldwork-21058
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Show Python
+        run: python3.12 --version
+
+      - name: Run tool-upgrade regression
+        continue-on-error: true
+        run: >-
+          cargo test -p uv --test tool
+          --no-default-features --features test-python,test-pypi
+          tool_upgrade_all_ignores_invalid_tool_name -- --nocapture
+
+      - name: Build probe binary
+        run: >-
+          cargo build -p uv --bin uv
+          --no-default-features --features test-python,test-pypi
+
+      - name: Probe sibling commands
+        shell: bash
+        run: |
+          set +e
+          tmp="$(mktemp -d)"
+          export UV_TOOL_DIR="$tmp/tools"
+          mkdir -p "$UV_TOOL_DIR/tool backup"
+
+          echo '=== uv tool list ==='
+          ./target/debug/uv tool list
+          echo "exit: $?"
+
+          echo '=== uv tool upgrade --all ==='
+          ./target/debug/uv tool upgrade --all
+          echo "exit: $?"
+
+          echo '=== uv tool uninstall --all ==='
+          ./target/debug/uv tool uninstall --all
+          echo "exit: $?"
