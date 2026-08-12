@@ -1,0 +1,79 @@
+name: Fieldwork materialize uv21058 E
+
+on:
+  push:
+    branches:
+      - fieldwork/uv21058-thunderdome-runner
+    paths:
+      - .github/workflows/fieldwork-uv21058-materialize-e.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fieldwork/upstream-95637-diagnostics
+          fetch-depth: 0
+
+      - name: Create scoped diagnostic branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git switch -C fieldwork/uv21058-e-scoped-central
+          python - <<'PY'
+          from pathlib import Path
+
+          diagnostics = Path("crates/uv/src/commands/diagnostics.rs")
+          text = diagnostics.read_text()
+
+          text = text.replace(
+              "use uv_errors::{Hint, Hints};\n",
+              "use uv_errors::{Hint, Hints};\nuse uv_fs::Simplified;\n",
+              1,
+          )
+
+          marker = "/// A rich reporter for operational diagnostics, i.e., errors that occur during resolution and\n/// installation.\n"
+          wrapper = '''/// Add command context and recovery guidance to failures while inspecting installed tools.\n#[derive(Debug, thiserror::Error)]\n#[error("Failed to inspect installed tools")]\npub(crate) struct ToolInventoryError {\n    invalid_name_root: Option<std::path::PathBuf>,\n    #[source]\n    source: uv_tool::Error,\n}\n\nimpl ToolInventoryError {\n    pub(crate) fn new(root: &std::path::Path, source: uv_tool::Error) -> Self {\n        let invalid_name_root =\n            matches!(&source, uv_tool::Error::ToolName(_)).then(|| root.to_path_buf());\n        Self {\n            invalid_name_root,\n            source,\n        }\n    }\n}\n\nimpl Hint for ToolInventoryError {\n    fn hints(&self) -> Hints<'_> {\n        let Some(root) = self.invalid_name_root.as_ref() else {\n            return Hints::none();\n        };\n        Hints::from(format!(\n            "Inspect the uv tool directory at `{}`; move the invalid directory outside it, or remove it",\n            root.user_display()\n        ))\n    }\n}\n\n'''
+          if marker not in text:
+              raise SystemExit("operation diagnostic marker not found")
+          text = text.replace(marker, wrapper + marker, 1)
+
+          collector = "    for cause in err.chain() {\n"
+          if collector not in text:
+              raise SystemExit("hint collector marker not found")
+          text = text.replace(
+              collector,
+              collector + "        collect_hint::<ToolInventoryError>(cause, &mut hints);\n",
+              1,
+          )
+          diagnostics.write_text(text)
+
+          upgrade = Path("crates/uv/src/commands/tool/upgrade.rs")
+          text = upgrade.read_text()
+          import_marker = "use crate::commands::pip::loggers::{\n"
+          if import_marker not in text:
+              raise SystemExit("upgrade import marker not found")
+          text = text.replace(
+              import_marker,
+              "use crate::commands::diagnostics::ToolInventoryError;\n" + import_marker,
+              1,
+          )
+
+          old = '''            installed_tools\n                .tools()\n                .unwrap_or_default()\n                .into_iter()\n'''
+          new = '''            installed_tools\n                .tools()\n                .map_err(|err| ToolInventoryError::new(installed_tools.root(), err))?\n                .into_iter()\n'''
+          if old not in text:
+              raise SystemExit("upgrade fallback block not found")
+          text = text.replace(old, new, 1)
+          upgrade.write_text(text)
+          PY
+
+          cargo fmt --all
+          git diff --check
+          git add crates/uv/src/commands/diagnostics.rs crates/uv/src/commands/tool/upgrade.rs
+          git -c user.name='fieldwork-rd' -c user.email='fieldwork-rd@users.noreply.github.com' commit -m 'Prototype scoped tool inventory diagnostic'
+          git push --force-with-lease origin fieldwork/uv21058-e-scoped-central
