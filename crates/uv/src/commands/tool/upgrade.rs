@@ -75,7 +75,8 @@ pub(crate) async fn upgrade(
                     } else {
                         Hints::none()
                     };
-                    let err = anyhow::Error::new(err).context("Failed to enumerate installed tools");
+                    let err =
+                        anyhow::Error::new(err).context("Failed to enumerate installed tools");
                     write_error_chain_with_options(
                         err.as_ref(),
                         hints,
