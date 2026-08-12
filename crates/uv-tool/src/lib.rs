@@ -76,8 +76,12 @@ pub enum Error {
     EntrypointRead(#[from] uv_install_wheel::Error),
     #[error("Failed to find a directory to install executables into")]
     NoExecutableDirectory,
-    #[error(transparent)]
-    ToolName(#[from] InvalidNameError),
+    #[error("Invalid tool directory at `{path}`")]
+    ToolName {
+        path: PathBuf,
+        #[source]
+        source: InvalidNameError,
+    },
     #[error(transparent)]
     EnvironmentError(#[from] uv_python::Error),
     #[error("Failed to find a receipt for tool `{0}` at {1}")]
@@ -101,7 +105,7 @@ impl Error {
             | Self::VirtualEnvError(_)
             | Self::EntrypointRead(_)
             | Self::NoExecutableDirectory
-            | Self::ToolName(_)
+            | Self::ToolName { .. }
             | Self::EnvironmentError(_)
             | Self::MissingToolReceipt(_, _)
             | Self::EnvironmentRead(_, _)
@@ -162,7 +166,10 @@ impl InstalledTools {
             else {
                 continue;
             };
-            let name = PackageName::from_str(name)?;
+            let name = PackageName::from_str(name).map_err(|source| Error::ToolName {
+                path: directory.clone(),
+                source,
+            })?;
             let path = directory.join("uv-receipt.toml");
             let contents = match fs_err::read_to_string(&path) {
                 Ok(contents) => contents,
@@ -246,7 +253,7 @@ impl InstalledTools {
         let environment_path = self.tool_dir(name);
 
         debug!(
-            "Deleting environment for tool `{name}` at {}",
+            "Deleting environment for tool `{name}`: {}",
             environment_path.user_display()
         );
 
@@ -413,7 +420,7 @@ pub fn entrypoint_paths(
     package_name: &PackageName,
     package_version: &Version,
 ) -> Result<Vec<(String, PathBuf)>, Error> {
-    // Find the `.dist-info` directory in the installed environment.
+    // Find the `.dist-info` directory for a package in an environment.
     let dist_info_path = find_dist_info(site_packages, package_name, package_version)?;
     debug!(
         "Looking at `.dist-info` at: {}",
