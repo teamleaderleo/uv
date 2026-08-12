@@ -11,8 +11,8 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::{Concurrency, Constraints, DryRun, HashCheckingMode, TargetTriple};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{ExtraBuildRequires, Name, Requirement, RequirementSource};
-use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
-use uv_fs::CWD;
+use uv_errors::{ErrorOptions, Hint, Hints, write_error_chain_with_options};
+use uv_fs::{CWD, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
@@ -41,6 +41,38 @@ use crate::commands::{ExitStatus, conjunction, tool::common::finalize_tool_insta
 use crate::printer::Printer;
 use crate::settings::ResolverInstallerSettings;
 
+/// Add command context and recovery guidance to failures while inspecting installed tools.
+#[derive(Debug, thiserror::Error)]
+#[error("Failed to inspect installed tools")]
+pub(crate) struct ToolInventoryError {
+    invalid_name_root: Option<std::path::PathBuf>,
+    #[source]
+    source: uv_tool::Error,
+}
+
+impl ToolInventoryError {
+    fn new(root: &std::path::Path, source: uv_tool::Error) -> Self {
+        let invalid_name_root =
+            matches!(&source, uv_tool::Error::ToolName(_)).then(|| root.to_path_buf());
+        Self {
+            invalid_name_root,
+            source,
+        }
+    }
+}
+
+impl Hint for ToolInventoryError {
+    fn hints(&self) -> Hints<'_> {
+        let Some(root) = self.invalid_name_root.as_ref() else {
+            return Hints::none();
+        };
+        Hints::from(format!(
+            "Inspect the uv tool directory at `{}`; move the invalid directory outside it, or remove it",
+            root.user_display()
+        ))
+    }
+}
+
 /// Upgrade a tool.
 pub(crate) async fn upgrade(
     names: Vec<String>,
@@ -67,7 +99,7 @@ pub(crate) async fn upgrade(
         if names.is_empty() {
             installed_tools
                 .tools()
-                .unwrap_or_default()
+                .map_err(|err| ToolInventoryError::new(installed_tools.root(), err))?
                 .into_iter()
                 .map(|(name, _)| (name, Vec::new()))
                 .collect()

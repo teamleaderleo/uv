@@ -231,6 +231,7 @@ pub(crate) fn write_error_chain(err: &anyhow::Error, printer: Printer) -> std::f
 pub(crate) fn hints_for_error(err: &anyhow::Error) -> Hints<'static> {
     let mut hints = Hints::none();
     for cause in err.chain() {
+        collect_hint::<crate::commands::tool::upgrade::ToolInventoryError>(cause, &mut hints);
         collect_hint::<Box<uv_resolver::NoSolutionError>>(cause, &mut hints);
         collect_hint::<uv_resolver::NoSolutionError>(cause, &mut hints);
         collect_hint::<uv_resolver::ResolveError>(cause, &mut hints);
