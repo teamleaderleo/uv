@@ -1,0 +1,40 @@
+name: Fieldwork fix uv21058 B2 snapshot
+
+on:
+  push:
+    branches:
+      - fieldwork/uv21058-thunderdome-runner
+    paths:
+      - .github/workflows/fieldwork-uv21058-b2-fix-snapshot.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fieldwork/uv21058-b2-polished
+          fetch-depth: 0
+
+      - name: Fix snapshot label
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("crates/uv/tests/tool/tool_upgrade.rs")
+          text = path.read_text()
+          old = '''    exit_code: 2\n    ----- stderr -----\n    error: Failed to inspect installed tools\n'''
+          new = '''    exit_code: 2 (failure)\n    ----- stderr -----\n    error: Failed to inspect installed tools\n'''
+          if old not in text:
+              raise SystemExit("polished B2 snapshot block not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+          git add crates/uv/tests/tool/tool_upgrade.rs
+          git -c user.name='fieldwork-rd' -c user.email='fieldwork-rd@users.noreply.github.com' commit -m 'Fix polished diagnostic snapshot exit label'
+          git push origin HEAD:fieldwork/uv21058-b2-polished
