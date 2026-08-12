@@ -67,7 +67,9 @@ pub(crate) async fn upgrade(
         if names.is_empty() {
             installed_tools
                 .tools()
-                .unwrap_or_default()
+                .map_err(|err| {
+                    anyhow::Error::new(err).context("Failed to enumerate installed tools")
+                })?
                 .into_iter()
                 .map(|(name, _)| (name, Vec::new()))
                 .collect()
