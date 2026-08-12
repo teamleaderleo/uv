@@ -19,6 +19,6 @@ jobs:
 
       - name: Run tool-upgrade regression
         run: >-
-          cargo test --locked -p uv --test tool
+          cargo test -p uv --test tool
           --no-default-features --features test-python,test-pypi
           tool_upgrade_all_ignores_invalid_tool_name -- --nocapture
