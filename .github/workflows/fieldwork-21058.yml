@@ -54,10 +54,17 @@ jobs:
           assert old in text
           upgrade.write_text(text.replace(old, new, 1))
 
+          tool_mod = Path("crates/uv/src/commands/tool/mod.rs")
+          text = tool_mod.read_text()
+          old = "mod upgrade;\n"
+          new = old + "pub(crate) use upgrade::ToolEnumerationError;\n"
+          assert old in text
+          tool_mod.write_text(text.replace(old, new, 1))
+
           diagnostics = Path("crates/uv/src/commands/diagnostics.rs")
           text = diagnostics.read_text()
           old = "use crate::commands::tool::run::ToolRunScriptError;\n"
-          new = old + "use crate::commands::tool::upgrade::ToolEnumerationError;\n"
+          new = old + "use crate::commands::tool::ToolEnumerationError;\n"
           assert old in text
           text = text.replace(old, new, 1)
           old = "        collect_hint::<ToolRunScriptError>(cause, &mut hints);\n"
