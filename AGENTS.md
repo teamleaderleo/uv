@@ -19,3 +19,14 @@
 - AVOID shortening variable names, e.g., use `version` instead of `ver`, and `requires_python`
   instead of `rp`
 - PREFER [`TypeName`] references when writing Rust doc comments
+
+## Owned-fork research guard
+
+This fork is also used for Fieldwork research and candidate preparation.
+
+- Automated workers ALWAYS use the literal `redirect.github.com` URL for every third-party GitHub issue, pull-request, or discussion reference they create.
+- There are NO automated exceptions. This applies to pull-request bodies, issues, comments, reviews, tracked notes, drafts, experiment records, and commit messages.
+- NEVER emit third-party `OWNER/REPOSITORY#NUMBER` shorthand or direct third-party issue, pull-request, or discussion URLs. If a direct reference is desired, a human must create it manually.
+- Direct repository-root, source-file, documentation, release, and commit links are unaffected.
+- Third-party upstream repositories are read-only to automated workers. Prepare patches, reproductions, tests, and human-facing text in owned surfaces; a human performs any upstream mutation manually.
+- Branches intended for upstream submission SHOULD start from the relevant upstream revision or an upstream-equivalent base instead of fork `main`, so fork-only research instructions do not enter upstream diffs.
